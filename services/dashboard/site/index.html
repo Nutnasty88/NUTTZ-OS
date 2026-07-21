@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NUTTZ OS</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, Helvetica, sans-serif;
+      background:
+        radial-gradient(circle at top, #283b52 0%, #101821 45%, #080c11 100%);
+      color: #f5f7fa;
+    }
+
+    header {
+      padding: 55px 24px 25px;
+      text-align: center;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(42px, 8vw, 82px);
+      letter-spacing: 5px;
+    }
+
+    .tagline {
+      margin-top: 12px;
+      color: #b8c5d1;
+      font-size: 18px;
+    }
+
+    .status {
+      display: inline-block;
+      margin-top: 20px;
+      padding: 9px 16px;
+      border: 1px solid #52d68a;
+      border-radius: 999px;
+      color: #75e7a6;
+      background: rgba(30, 120, 72, 0.16);
+    }
+
+    main {
+      width: min(1100px, 92%);
+      margin: 20px auto 60px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 18px;
+    }
+
+    .card {
+      display: block;
+      min-height: 170px;
+      padding: 24px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.055);
+      color: inherit;
+      text-decoration: none;
+      transition: transform 0.2s ease, background 0.2s ease;
+      backdrop-filter: blur(10px);
+    }
+
+    .card:hover {
+      transform: translateY(-5px);
+      background: rgba(255, 255, 255, 0.095);
+    }
+
+    .icon {
+      font-size: 38px;
+      margin-bottom: 16px;
+    }
+
+    .card h2 {
+      margin: 0 0 9px;
+      font-size: 22px;
+    }
+
+    .card p {
+      margin: 0;
+      color: #afbdc9;
+      line-height: 1.5;
+    }
+
+    .offline {
+      opacity: 0.55;
+      cursor: default;
+    }
+
+    footer {
+      padding: 25px;
+      text-align: center;
+      color: #778694;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>NUTTZ OS</h1>
+    <div class="tagline">Your private cloud and server platform</div>
+    <div class="status">● Core system online</div>
+  </header>
+
+  <main>
+    <div class="grid">
+      <a class="card" href="https://localhost:9443">
+        <div class="icon">🐳</div>
+        <h2>Portainer</h2>
+        <p>Manage containers, images, networks, volumes and stacks.</p>
+      </a>
+
+      <div class="card offline">
+        <div class="icon">☁️</div>
+        <h2>Cloud Storage</h2>
+        <p>Nextcloud will be installed in a later milestone.</p>
+      </div>
+
+      <div class="card offline">
+        <div class="icon">🔒</div>
+        <h2>VPN</h2>
+        <p>Secure remote access through Tailscale.</p>
+      </div>
+
+      <div class="card offline">
+        <div class="icon">📧</div>
+        <h2>Mail Server</h2>
+        <p>SMTP, IMAP, webmail and spam protection.</p>
+      </div>
+
+      <div class="card offline">
+        <div class="icon">📊</div>
+        <h2>Monitoring</h2>
+        <p>CPU, memory, storage and container health.</p>
+      </div>
+
+      <div class="card offline">
+        <div class="icon">💾</div>
+        <h2>Backups</h2>
+        <p>Automated service and configuration backups.</p>
+      </div>
+    </div>
+  </main>
+
+  <footer>NUTTZ OS v0.1 Foundation</footer>
+</body>
+</html>

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Python virtual environments
+venv/
+.venv/
+
+# Node
+node_modules/
+dist/
+
+# Environment and secrets
+.env
+.env.*
+
+# Runtime data
+data/
+logs/
+backups/
+
+# Docker-generated Caddy data
+services/caddy/config/
+services/caddy/data/
+
+# Editor and OS files
+.vscode/
+.DS_Store
+Thumbs.db
