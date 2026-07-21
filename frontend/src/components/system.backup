@@ -1,0 +1,44 @@
+import { useEffect, useState } from "react";
+import { getSystem } from "../../services/api";
+
+export default function SystemMonitor() {
+  const [system, setSystem] = useState(null);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const data = await getSystem();
+        setSystem(data);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    load();
+
+    const timer = setInterval(load, 5000);
+
+    return () => clearInterval(timer);
+  }, []);
+
+  if (!system) {
+    return (
+      <div className="panel-card">
+        <h2>💻 System Monitor</h2>
+        <p>Loading...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="panel-card">
+      <h2>💻 System Monitor</h2>
+
+      <p><strong>Hostname:</strong> {system.hostname}</p>
+      <p><strong>OS:</strong> {system.os}</p>
+      <p><strong>CPU:</strong> {system.cpu}</p>
+      <p><strong>Memory:</strong> {system.memory}</p>
+      <p><strong>Backend:</strong> 🟢 Connected</p>
+    </div>
+  );
+}
