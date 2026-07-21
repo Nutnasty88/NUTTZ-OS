@@ -1,0 +1,61 @@
+#!/bin/bash
+
+VERSION="0.2"
+
+case "$1" in
+
+start)
+    ~/NUTTZ-OS/tools/start-core.sh
+    ;;
+
+stop)
+    pkill -f "fastapi"
+    echo "NUTTZ Core stopped."
+    ;;
+
+status)
+    echo
+    echo "========== NUTTZ STATUS =========="
+    docker ps
+    ;;
+
+doctor)
+    echo
+    echo "========== NUTTZ DOCTOR =========="
+
+    docker --version
+
+    docker compose version
+
+    python3 --version
+
+    echo
+    echo "Disk Usage"
+    df -h /
+
+    echo
+    echo "Memory"
+    free -h
+    ;;
+
+version)
+    echo "NUTTZ OS $VERSION"
+    ;;
+
+*)
+
+echo
+echo "NUTTZ OS"
+
+echo
+echo "Usage:"
+echo
+echo "nuttz start"
+echo "nuttz stop"
+echo "nuttz status"
+echo "nuttz doctor"
+echo "nuttz version"
+
+;;
+
+esac
