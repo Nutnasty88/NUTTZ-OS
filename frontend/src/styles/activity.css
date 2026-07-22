@@ -1,0 +1,45 @@
+.activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.activity-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.activity-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+
+.activity-dot.success {
+  background: var(--success);
+}
+
+.activity-dot.info {
+  background: var(--primary);
+}
+
+.activity-dot.work {
+  background: var(--warning);
+}
+
+.activity-content {
+  flex: 1;
+}
+
+.activity-time {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-bottom: 2px;
+}
+
+.activity-message {
+  color: var(--text);
+}

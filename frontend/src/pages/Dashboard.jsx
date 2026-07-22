@@ -1,6 +1,7 @@
 import ChatPanel from "../chat/ChatPanel";
 import AICenter from "../components/AICenter";
 import MissionQueue from "../components/dashboard/MissionQueue";
+import ActivityFeed from "../components/dashboard/ActivityFeed";
 import SystemMonitor from "../components/system/SystemMonitor";
 
 export default function Dashboard({ backendOnline }) {
@@ -21,9 +22,10 @@ export default function Dashboard({ backendOnline }) {
         </div>
 
         <MissionQueue />
-
+        <ActivityFeed />
         <SystemMonitor />
       </aside>
     </div>
   );
+
 }

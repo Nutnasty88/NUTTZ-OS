@@ -48,5 +48,4 @@ function ActivityFeed({ online, docker, lastUpdated }) {
     </section>
   );
 }
-
 export default ActivityFeed;
