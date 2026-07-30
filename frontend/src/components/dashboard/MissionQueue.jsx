@@ -46,7 +46,21 @@ export default function MissionQueue() {
           <div className="mission-status">
             {mission.status}
           </div>
-
+          <div style={{ marginTop: "10px" }}>
+  <button
+    onClick={() => alert(`Run clicked: ${mission.name}`)}
+    style={{
+      padding: "6px 12px",
+      background: "#2d8cff",
+      color: "white",
+      border: "none",
+      borderRadius: "4px",
+      cursor: "pointer",
+    }}
+  >
+    ▶ Run
+  </button>
+</div>
           <div className="progress-bar">
             <div
               className="progress-fill"
