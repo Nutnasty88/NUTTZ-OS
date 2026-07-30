@@ -21,11 +21,38 @@ export default function Dashboard({ backendOnline }) {
           <AICenter />
         </div>
 
-        <MissionQueue />
+        <div className="panel-card">
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "12px",
+            }}
+          >
+            <h2>📋 Mission Control</h2>
+
+            <button
+              type="button"
+              onClick={() => alert("Mission Manager coming next 🚀")}
+              style={{
+                padding: "8px 14px",
+                borderRadius: "8px",
+                border: "none",
+                cursor: "pointer",
+                fontWeight: "bold",
+              }}
+            >
+              + New Mission
+            </button>
+          </div>
+
+          <MissionQueue />
+        </div>
+
         <ActivityFeed />
         <SystemMonitor />
       </aside>
     </div>
   );
-
 }
