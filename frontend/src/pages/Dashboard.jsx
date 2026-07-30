@@ -1,3 +1,5 @@
+import { useState } from "react";
+import MissionManager from "../components/missions/MissionManager";
 import ChatPanel from "../chat/ChatPanel";
 import AICenter from "../components/AICenter";
 import MissionQueue from "../components/dashboard/MissionQueue";
@@ -5,6 +7,7 @@ import ActivityFeed from "../components/dashboard/ActivityFeed";
 import SystemMonitor from "../components/system/SystemMonitor";
 
 export default function Dashboard({ backendOnline }) {
+  const [showMissionManager, setShowMissionManager] = useState(false);
   return (
     <div className="dashboard-grid">
       <section className="chat-section">
@@ -34,7 +37,7 @@ export default function Dashboard({ backendOnline }) {
 
             <button
               type="button"
-              onClick={() => alert("Mission Manager coming next 🚀")}
+              onClick={() => setShowMissionManager(true)}
               style={{
                 padding: "8px 14px",
                 borderRadius: "8px",
@@ -53,6 +56,11 @@ export default function Dashboard({ backendOnline }) {
         <ActivityFeed />
         <SystemMonitor />
       </aside>
+      <MissionManager
+  open={showMissionManager}
+  onClose={() => setShowMissionManager(false)}
+  onCreated={() => window.location.reload()}
+/>
     </div>
   );
 }

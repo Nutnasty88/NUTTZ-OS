@@ -12,7 +12,7 @@ from docker.errors import DockerException
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers.ollama import router as ollama_router
-
+from app.routers.missions import router as missions_router
 
 app = FastAPI(
     title="NUTTZ Core API",
@@ -155,3 +155,5 @@ def docker_status() -> dict[str, Any]:
 
 # Ollama AI Center routes
 app.include_router(ollama_router)
+# Mission routes
+app.include_router(missions_router)
