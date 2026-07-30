@@ -19,7 +19,7 @@ export default function MissionManager({
 
     try {
       const response = await fetch(
-        "http://127.0.0.1:8000/api/missions",
+        "http://127.0.0.1:8000/api/missions/",
         {
           method: "POST",
           headers: {

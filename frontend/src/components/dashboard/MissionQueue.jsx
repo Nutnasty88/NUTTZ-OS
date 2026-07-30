@@ -6,7 +6,7 @@ export default function MissionQueue() {
   useEffect(() => {
     async function loadMissions() {
       try {
-        const response = await fetch("http://127.0.0.1:8000/api/missions");
+        const response = await fetch("http://127.0.0.1:8000/api/missions/");
         const data = await response.json();
 
         setMissions(
