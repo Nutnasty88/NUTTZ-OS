@@ -70,3 +70,25 @@ def create_mission(mission: MissionCreate):
         "success": True,
         "message": "Mission created",
     }
+
+
+@router.post("/{mission_id}/run")
+def run_mission(mission_id: int):
+    conn = get_connection()
+
+    conn.execute(
+        """
+        UPDATE missions
+        SET status='Running'
+        WHERE id=?
+        """,
+        (mission_id,),
+    )
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": True,
+        "message": f"Mission {mission_id} is now running."
+    }

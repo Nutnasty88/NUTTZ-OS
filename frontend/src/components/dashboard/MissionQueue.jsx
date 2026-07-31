@@ -48,7 +48,24 @@ export default function MissionQueue() {
           </div>
           <div style={{ marginTop: "10px" }}>
   <button
-    onClick={() => alert(`Run clicked: ${mission.name}`)}
+    onClick={async () => {
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:8000/api/missions/${mission.id}/run`,
+      {
+        method: "POST",
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error("Failed to start mission");
+    }
+
+    loadMissions();
+  } catch (err) {
+    alert(err.message);
+  }
+}}
     style={{
       padding: "6px 12px",
       background: "#2d8cff",
