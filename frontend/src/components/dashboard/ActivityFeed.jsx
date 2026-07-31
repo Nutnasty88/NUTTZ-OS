@@ -1,28 +1,32 @@
-function ActivityFeed({ online, docker, lastUpdated }) {
+export default function ActivityFeed({ online, docker, missions = [] }) {
   const running = docker?.running ?? 0;
   const total = docker?.total ?? 0;
 
-  const events = [
-    {
-      title: online ? "NUTTZ Core responding" : "NUTTZ Core unavailable",
-      detail: online
-        ? "System telemetry is flowing normally."
-        : "Check that FastAPI is running on port 8000.",
-      level: online ? "good" : "bad",
-    },
-    {
-      title: `${running} Docker containers running`,
-      detail: `${total} total containers registered by the engine.`,
-      level: running > 0 ? "good" : "neutral",
-    },
-    {
-      title: "Dashboard synchronization",
-      detail: lastUpdated
-        ? `Last successful refresh at ${lastUpdated.toLocaleTimeString()}.`
-        : "Waiting for the first successful refresh.",
-      level: "neutral",
-    },
-  ];
+  const journal = [];
+
+  journal.push({
+    time: new Date().toLocaleTimeString(),
+    text: online
+      ? "✅ Backend connected."
+      : "❌ Backend offline.",
+  });
+
+  journal.push({
+    time: new Date().toLocaleTimeString(),
+    text: `🤖 Ollama model detected: qwen3:8b`,
+  });
+
+  journal.push({
+    time: new Date().toLocaleTimeString(),
+    text: `🐳 Docker: ${running}/${total} containers running.`,
+  });
+
+  missions.forEach((mission) => {
+    journal.push({
+      time: new Date().toLocaleTimeString(),
+      text: `📋 ${mission.name} • ${mission.status}`,
+    });
+  });
 
   return (
     <section className="panel activity-panel">
@@ -34,13 +38,15 @@ function ActivityFeed({ online, docker, lastUpdated }) {
       </div>
 
       <div className="activity-list">
-        {events.map((event) => (
-          <article className="activity-item" key={event.title}>
-            <span className={`activity-indicator ${event.level}`} />
-
+        {journal.map((entry, index) => (
+          <article className="activity-item" key={index}>
+            <span
+              className="activity-indicator good"
+              style={{ marginTop: 6 }}
+            />
             <div>
-              <strong>{event.title}</strong>
-              <p>{event.detail}</p>
+              <strong>{entry.time}</strong>
+              <p>{entry.text}</p>
             </div>
           </article>
         ))}
@@ -48,4 +54,3 @@ function ActivityFeed({ online, docker, lastUpdated }) {
     </section>
   );
 }
-export default ActivityFeed;
