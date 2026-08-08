@@ -53,7 +53,7 @@ export default function Dashboard({ backendOnline }) {
           <MissionQueue />
         </div>
 
-        <ActivityFeed />
+        <ActivityFeed online={backendOnline} />
         <SystemMonitor />
       </aside>
       <MissionManager
