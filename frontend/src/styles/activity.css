@@ -43,3 +43,84 @@
 .activity-message {
   color: var(--text);
 }
+/* Compact live Agent Journal */
+.activity-panel {
+  overflow: hidden;
+}
+
+.activity-list {
+  max-height: 430px;
+  gap: 8px;
+  padding-right: 6px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #3c506b #0a1322;
+}
+
+.activity-item {
+  padding: 11px 12px;
+  background: rgba(8, 17, 30, 0.75);
+  border: 1px solid rgba(85, 167, 255, 0.2);
+  border-radius: 7px;
+}
+
+.activity-indicator {
+  width: 9px;
+  height: 9px;
+  margin-top: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.activity-item p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.activity-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.activity-list::-webkit-scrollbar-thumb {
+  background: #3c506b;
+  border-radius: 999px;
+}
+
+.activity-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 12px 0 8px;
+}
+
+.activity-filter {
+  padding: 7px 12px;
+  color: var(--muted);
+  background: rgba(8, 17, 30, 0.8);
+  border: 1px solid rgba(85, 167, 255, 0.35);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  transition:
+    color 0.2s ease,
+    background 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.activity-filter:hover {
+  color: var(--text);
+  border-color: #55a7ff;
+}
+
+.activity-filter.active {
+  color: #ffffff;
+  background: #2d8cff;
+  border-color: #55a7ff;
+}
+
+.activity-count {
+  margin-bottom: 9px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}

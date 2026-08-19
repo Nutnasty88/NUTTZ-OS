@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 
 const EVENTS_URL =
@@ -43,6 +43,7 @@ export default function ActivityFeed({ online }) {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [activeFilter, setActiveFilter] = useState("All");
 
   useEffect(() => {
     let cancelled = false;
@@ -83,6 +84,18 @@ export default function ActivityFeed({ online }) {
     };
   }, []);
 
+  const filteredEvents = useMemo(() => {
+    if (activeFilter === "All") {
+      return events;
+    }
+
+    return events.filter(
+      (event) =>
+        String(event.agent || "").toLowerCase() ===
+        activeFilter.toLowerCase(),
+    );
+  }, [activeFilter, events]);
+
   return (
     <section className="panel activity-panel">
       <div className="panel-heading">
@@ -101,6 +114,29 @@ export default function ActivityFeed({ online }) {
         </span>
       </div>
 
+      <div className="activity-toolbar">
+        {["All", "Planner", "Researcher", "Executor"].map(
+          (filter) => (
+            <button
+              type="button"
+              key={filter}
+              className={
+                activeFilter === filter
+                  ? "activity-filter active"
+                  : "activity-filter"
+              }
+              onClick={() => setActiveFilter(filter)}
+            >
+              {filter}
+            </button>
+          ),
+        )}
+      </div>
+
+      <div className="activity-count">
+        Showing {filteredEvents.length} of {events.length} events
+      </div>
+
       {error && (
         <p style={{ color: "#ff7b7b" }}>{error}</p>
       )}
@@ -115,7 +151,7 @@ export default function ActivityFeed({ online }) {
           </article>
         )}
 
-        {!loading && events.length === 0 && !error && (
+        {!loading && filteredEvents.length === 0 && !error && (
           <article className="activity-item">
             <div>
               <strong>No agent events yet</strong>
@@ -124,7 +160,7 @@ export default function ActivityFeed({ online }) {
           </article>
         )}
 
-        {events.map((event) => (
+        {filteredEvents.map((event) => (
           <article className="activity-item" key={event.id}>
             <span
               className="activity-indicator"
