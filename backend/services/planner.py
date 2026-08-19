@@ -1,5 +1,5 @@
 from typing import Any
-
+from app.services.events import log_event
 from app.database.database import get_connection
 from services.ollama_service import chat_with_ollama
 
@@ -49,6 +49,13 @@ def extract_plan(response: dict[str, Any]) -> str:
 
 
 def create_plan(mission_id: int) -> dict[str, Any]:
+    log_event(
+    mission_id,
+    "Planner",
+    "started",
+    "Planner received mission and started planning",
+    )
+
     ensure_plan_table()
 
     conn = get_connection()
@@ -152,6 +159,13 @@ Current status: {mission["status"]}
         conn.commit()
     finally:
         conn.close()
+
+    log_event(
+        mission_id,
+        "Planner",
+        "completed",
+        "Mission plan created",
+    )
 
     return {
         "mission_id": mission_id,

@@ -8,6 +8,7 @@ from services.executor import (
     sync_tasks,
 )
 from services.planner import create_plan, get_plan
+from app.services.researcher import research
 from services.autonomous_worker import get_worker_status, pause_worker, start_worker
 
 
@@ -96,7 +97,7 @@ def run_mission(mission_id: int):
     try:
         mission = conn.execute(
             """
-            SELECT id
+            SELECT id, title
             FROM missions
             WHERE id=?
             """,
@@ -126,6 +127,12 @@ def run_mission(mission_id: int):
 
     try:
         planner_result = create_plan(mission_id)
+
+        research_result = research(
+            mission_id,
+            mission["title"],
+        )
+
         tasks = sync_tasks(
             mission_id,
             planner_result["plan"],
@@ -158,6 +165,7 @@ def run_mission(mission_id: int):
         "success": True,
         "message": f"Mission {mission_id} is now running.",
         "planner": planner_result,
+        "research": research_result,
         "tasks": tasks,
     }
 

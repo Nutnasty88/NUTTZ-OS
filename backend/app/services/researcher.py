@@ -1,11 +1,19 @@
 import requests
 import json
+from app.services.events import log_event
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 MODEL = "qwen3:8b"
 
 
-def research(mission_title: str):
+def research(mission_id: int, mission_title: str):
+    log_event(
+        mission_id,
+        "Researcher",
+        "started",
+        "Research started",
+    )
+
     prompt = f"""
 You are the Research Agent inside NUTTZ OS.
 
@@ -41,14 +49,23 @@ Format:
     result = response.json()["response"]
 
     try:
-        return json.loads(result)
+        report = json.loads(result)
     except Exception:
-        return {
+        report = {
             "summary": result,
             "technologies": [],
             "steps": [],
             "risks": [],
         }
+
+    log_event(
+        mission_id,
+        "Researcher",
+        "completed",
+        "Research completed",
+    )
+
+    return report
 
 
 if __name__ == "__main__":

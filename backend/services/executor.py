@@ -3,6 +3,7 @@ import re
 from typing import Any
 
 from app.database.database import get_connection
+from app.services.events import log_event
 from services.ollama_service import chat_with_ollama
 from services.tool_runner import run_tool
 
@@ -376,6 +377,13 @@ def execute_next_task(mission_id: int) -> dict[str, Any]:
     finally:
         conn.close()
 
+    log_event(
+        mission_id,
+        "Executor",
+        "started",
+        "Task execution started",
+    )
+
     system_prompt = """
 You are Executor Agent v1 inside NUTTZ-OS.
 
@@ -477,6 +485,13 @@ Task instructions:
         finally:
             conn.close()
 
+        log_event(
+            mission_id,
+            "Executor",
+            "error",
+            "Task execution failed",
+        )
+
         raise
 
     conn = get_connection()
@@ -539,6 +554,13 @@ Task instructions:
         conn.commit()
     finally:
         conn.close()
+
+    log_event(
+        mission_id,
+        "Executor",
+        "completed",
+        "Task execution completed",
+    )
 
     return {
         "mission_id": mission_id,

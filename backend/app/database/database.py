@@ -28,5 +28,19 @@ def init_db():
         """
     )
 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mission_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mission_id INTEGER,
+            agent TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (mission_id) REFERENCES missions(id)
+        )
+        """
+    )
+
     conn.commit()
     conn.close()
