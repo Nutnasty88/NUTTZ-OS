@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers.ollama import router as ollama_router
 from app.routers.missions import router as missions_router
+from app.routers.events import router as events_router
 
 app = FastAPI(
     title="NUTTZ Core API",
@@ -159,3 +160,5 @@ def docker_status() -> dict[str, Any]:
 app.include_router(ollama_router)
 # Mission routes
 app.include_router(missions_router)
+# Agent activity routes
+app.include_router(events_router)
