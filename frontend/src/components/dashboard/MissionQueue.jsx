@@ -65,9 +65,11 @@ export default function MissionQueue() {
     useState(null);
 
   const [openPlanId, setOpenPlanId] = useState(null);
+  const [openResearchId, setOpenResearchId] = useState(null);
   const [openTasksId, setOpenTasksId] = useState(null);
 
   const [plans, setPlans] = useState({});
+  const [researchByMission, setResearchByMission] = useState({});
   const [tasksByMission, setTasksByMission] = useState({});
   const [errors, setErrors] = useState({});
   const [worker, setWorker] = useState(EMPTY_WORKER);
@@ -261,6 +263,7 @@ export default function MissionQueue() {
       [missionId]: "",
     }));
 
+    setOpenResearchId(null);
     setOpenTasksId(null);
 
     if (plans[missionId]) {
@@ -296,6 +299,53 @@ export default function MissionQueue() {
   }
 
 
+  async function toggleResearch(missionId) {
+    if (openResearchId === missionId) {
+      setOpenResearchId(null);
+      return;
+    }
+
+    setErrors((current) => ({
+      ...current,
+      [missionId]: "",
+    }));
+
+    setOpenPlanId(null);
+    setOpenTasksId(null);
+
+    if (researchByMission[missionId]) {
+      setOpenResearchId(missionId);
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/missions/${missionId}/research`,
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail || "No saved research was found.",
+        );
+      }
+
+      setResearchByMission((current) => ({
+        ...current,
+        [missionId]: data,
+      }));
+
+      setOpenResearchId(missionId);
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        [missionId]: error.message,
+      }));
+    }
+  }
+
+
   async function toggleTasks(missionId) {
     if (openTasksId === missionId) {
       setOpenTasksId(null);
@@ -308,6 +358,7 @@ export default function MissionQueue() {
     }));
 
     setOpenPlanId(null);
+    setOpenResearchId(null);
 
     try {
       await loadTasks(missionId);
@@ -469,9 +520,28 @@ export default function MissionQueue() {
           workerActionMissionId === mission.id;
 
         const plan = plans[mission.id];
+        const research = researchByMission[mission.id];
+        const researchReport = research?.report || {};
+        const researchTechnologies = Array.isArray(
+          researchReport.technologies,
+        )
+          ? researchReport.technologies
+          : [];
+        const researchSteps = Array.isArray(
+          researchReport.steps,
+        )
+          ? researchReport.steps
+          : [];
+        const researchRisks = Array.isArray(
+          researchReport.risks,
+        )
+          ? researchReport.risks
+          : [];
         const tasks = tasksByMission[mission.id] || [];
 
         const isPlanOpen = openPlanId === mission.id;
+        const isResearchOpen =
+          openResearchId === mission.id;
         const areTasksOpen = openTasksId === mission.id;
 
         const completedTasks = tasks.filter(
@@ -560,6 +630,25 @@ export default function MissionQueue() {
 
               <button
                 type="button"
+                onClick={() => toggleResearch(mission.id)}
+                style={{
+                  padding: "7px 13px",
+                  background: isResearchOpen
+                    ? "#0f9f8f"
+                    : "#253246",
+                  color: "white",
+                  border: "1px solid #287f77",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                }}
+              >
+                {isResearchOpen
+                  ? "Hide Research"
+                  : "View Research"}
+              </button>
+
+              <button
+                type="button"
                 onClick={() => toggleTasks(mission.id)}
                 style={{
                   padding: "7px 13px",
@@ -643,6 +732,87 @@ export default function MissionQueue() {
                 >
                   {plan.plan}
                 </div>
+              </div>
+            )}
+
+            {isResearchOpen && research && (
+              <div
+                style={{
+                  marginTop: "14px",
+                  padding: "14px",
+                  background: "rgba(5, 28, 31, 0.94)",
+                  border: "1px solid #0f9f8f",
+                  borderRadius: "7px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    flexWrap: "wrap",
+                    gap: "10px",
+                    marginBottom: "12px",
+                  }}
+                >
+                  <strong style={{ color: "#53e0cf" }}>
+                    Researcher Agent v1
+                  </strong>
+
+                  <span
+                    style={{
+                      color: "#9fb4c9",
+                      fontSize: "12px",
+                    }}
+                  >
+                    {research.model}
+                  </span>
+                </div>
+
+                <div
+                  style={{
+                    color: "#dce8f4",
+                    whiteSpace: "pre-wrap",
+                    lineHeight: 1.55,
+                    marginBottom: "14px",
+                  }}
+                >
+                  {researchReport.summary ||
+                    "No research summary was returned."}
+                </div>
+
+                {[
+                  ["Technologies", researchTechnologies],
+                  ["Recommended Steps", researchSteps],
+                  ["Risks", researchRisks],
+                ].map(([label, items]) => (
+                  items.length > 0 && (
+                    <div
+                      key={label}
+                      style={{ marginTop: "12px" }}
+                    >
+                      <strong style={{ color: "#53e0cf" }}>
+                        {label}
+                      </strong>
+
+                      <ol
+                        style={{
+                          marginTop: "7px",
+                          paddingLeft: "22px",
+                          color: "#cfe0e8",
+                        }}
+                      >
+                        {items.map((item, index) => (
+                          <li
+                            key={`${label}-${index}`}
+                            style={{ marginBottom: "5px" }}
+                          >
+                            {String(item)}
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  )
+                ))}
               </div>
             )}
 

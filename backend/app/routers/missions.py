@@ -8,7 +8,7 @@ from services.executor import (
     sync_tasks,
 )
 from services.planner import create_plan, get_plan
-from app.services.researcher import research
+from app.services.researcher import get_research_report, research
 from services.autonomous_worker import get_worker_status, pause_worker, start_worker
 
 
@@ -168,6 +168,19 @@ def run_mission(mission_id: int):
         "research": research_result,
         "tasks": tasks,
     }
+
+
+@router.get("/{mission_id}/research")
+def get_mission_research(mission_id: int):
+    research_report = get_research_report(mission_id)
+
+    if research_report is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No research exists for mission {mission_id}.",
+        )
+
+    return research_report
 
 
 @router.get("/{mission_id}/plan")
