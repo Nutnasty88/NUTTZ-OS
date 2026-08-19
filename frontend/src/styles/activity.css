@@ -124,3 +124,45 @@
   color: var(--muted);
   font-size: 0.75rem;
 }
+
+/* Agent and mission filtering */
+.activity-toolbar {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.activity-agent-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.activity-mission-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.activity-mission-control select {
+  min-width: 135px;
+  padding: 7px 10px;
+  color: var(--text);
+  background: rgba(8, 17, 30, 0.9);
+  border: 1px solid rgba(85, 167, 255, 0.35);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.activity-mission-control select:focus {
+  border-color: #55a7ff;
+  outline: none;
+}
+
+@media (max-width: 720px) {
+  .activity-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
