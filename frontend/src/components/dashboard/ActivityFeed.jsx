@@ -44,6 +44,7 @@ export default function ActivityFeed({ online }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [activeFilter, setActiveFilter] = useState("All");
+  const [activeMission, setActiveMission] = useState("All");
 
   useEffect(() => {
     let cancelled = false;
@@ -84,17 +85,39 @@ export default function ActivityFeed({ online }) {
     };
   }, []);
 
-  const filteredEvents = useMemo(() => {
-    if (activeFilter === "All") {
-      return events;
-    }
+  const missionIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          events
+            .map((event) => event.mission_id)
+            .filter(
+              (missionId) =>
+                missionId !== null &&
+                missionId !== undefined,
+            )
+            .map(String),
+        ),
+      ).sort((left, right) => Number(right) - Number(left)),
+    [events],
+  );
 
-    return events.filter(
-      (event) =>
-        String(event.agent || "").toLowerCase() ===
-        activeFilter.toLowerCase(),
-    );
-  }, [activeFilter, events]);
+  const filteredEvents = useMemo(
+    () =>
+      events.filter((event) => {
+        const matchesAgent =
+          activeFilter === "All" ||
+          String(event.agent || "").toLowerCase() ===
+            activeFilter.toLowerCase();
+
+        const matchesMission =
+          activeMission === "All" ||
+          String(event.mission_id) === activeMission;
+
+        return matchesAgent && matchesMission;
+      }),
+    [activeFilter, activeMission, events],
+  );
 
   return (
     <section className="panel activity-panel">
@@ -115,22 +138,43 @@ export default function ActivityFeed({ online }) {
       </div>
 
       <div className="activity-toolbar">
-        {["All", "Planner", "Researcher", "Executor"].map(
-          (filter) => (
-            <button
-              type="button"
-              key={filter}
-              className={
-                activeFilter === filter
-                  ? "activity-filter active"
-                  : "activity-filter"
-              }
-              onClick={() => setActiveFilter(filter)}
-            >
-              {filter}
-            </button>
-          ),
-        )}
+        <div className="activity-agent-filters">
+          {["All", "Planner", "Researcher", "Executor"].map(
+            (filter) => (
+              <button
+                type="button"
+                key={filter}
+                className={
+                  activeFilter === filter
+                    ? "activity-filter active"
+                    : "activity-filter"
+                }
+                onClick={() => setActiveFilter(filter)}
+              >
+                {filter}
+              </button>
+            ),
+          )}
+        </div>
+
+        <label className="activity-mission-control">
+          <span>Mission</span>
+
+          <select
+            value={activeMission}
+            onChange={(event) =>
+              setActiveMission(event.target.value)
+            }
+          >
+            <option value="All">All missions</option>
+
+            {missionIds.map((missionId) => (
+              <option value={missionId} key={missionId}>
+                Mission #{missionId}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       <div className="activity-count">
@@ -154,8 +198,8 @@ export default function ActivityFeed({ online }) {
         {!loading && filteredEvents.length === 0 && !error && (
           <article className="activity-item">
             <div>
-              <strong>No agent events yet</strong>
-              <p>Run a mission to begin the journal.</p>
+              <strong>No matching agent events</strong>
+              <p>Try another agent or mission filter.</p>
             </div>
           </article>
         )}
