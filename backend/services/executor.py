@@ -102,7 +102,7 @@ def sync_tasks(mission_id: int, plan: str) -> list[dict[str, Any]]:
     try:
         mission = conn.execute(
             """
-            SELECT id
+            SELECT id, status
             FROM missions
             WHERE id=?
             """,
@@ -111,6 +111,34 @@ def sync_tasks(mission_id: int, plan: str) -> list[dict[str, Any]]:
 
         if mission is None:
             raise ValueError(f"Mission {mission_id} was not found.")
+
+        blocked_task = conn.execute(
+            """
+            SELECT id, position, title
+            FROM mission_tasks
+            WHERE
+                mission_id=?
+                AND status='Blocked'
+            ORDER BY position ASC
+            LIMIT 1
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if mission["status"] == "Blocked" or blocked_task is not None:
+            if blocked_task is not None:
+                blocked_detail = (
+                    f"task {blocked_task['position']} "
+                    f"({blocked_task['title']})"
+                )
+            else:
+                blocked_detail = "the mission Evidence Gate"
+
+            raise RuntimeError(
+                f"Mission {mission_id} is blocked by {blocked_detail}. "
+                "Blocked task evidence must be resolved or explicitly reset "
+                "before task synchronization."
+            )
 
         conn.execute(
             """

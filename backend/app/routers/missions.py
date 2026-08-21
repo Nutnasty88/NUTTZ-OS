@@ -9,6 +9,7 @@ from services.executor import (
 )
 from services.planner import create_plan, get_plan
 from app.services.researcher import get_research_report, research
+from app.services.reporter import create_deliverable, get_deliverable
 from services.autonomous_worker import get_worker_status, pause_worker, start_worker
 
 
@@ -58,6 +59,44 @@ def get_missions():
     ]
 
 
+@router.get("/{mission_id}")
+def get_mission(mission_id: int):
+    conn = get_connection()
+
+    try:
+        row = conn.execute(
+            """
+            SELECT
+                id,
+                title,
+                status,
+                progress,
+                assigned_agent,
+                priority
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Mission {mission_id} was not found.",
+        )
+
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "status": row["status"],
+        "progress": row["progress"],
+        "agent": row["assigned_agent"],
+        "priority": row["priority"],
+    }
+
+
 @router.post("/")
 def create_mission(mission: MissionCreate):
     conn = get_connection()
@@ -97,7 +136,7 @@ def run_mission(mission_id: int):
     try:
         mission = conn.execute(
             """
-            SELECT id, title
+            SELECT id, title, status
             FROM missions
             WHERE id=?
             """,
@@ -108,6 +147,16 @@ def run_mission(mission_id: int):
             raise HTTPException(
                 status_code=404,
                 detail=f"Mission {mission_id} was not found.",
+            )
+
+        if mission["status"] == "Blocked":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Mission {mission_id} is blocked by the Evidence Gate. "
+                    "Resolve or explicitly reset the blocked task before "
+                    "running the mission again."
+                ),
             )
 
         conn.execute(
@@ -252,6 +301,46 @@ def execute_mission_task(mission_id: int):
         "executor": executor_result,
         "tasks": get_tasks(mission_id),
     }
+
+
+@router.post("/{mission_id}/deliverable")
+def generate_mission_deliverable(mission_id: int):
+    try:
+        deliverable = create_deliverable(mission_id)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Reporter Agent failed: {error}",
+        ) from error
+
+    return {
+        "success": True,
+        "message": "Final deliverable created.",
+        "deliverable": deliverable,
+    }
+
+
+@router.get("/{mission_id}/deliverable")
+def get_mission_deliverable(mission_id: int):
+    deliverable = get_deliverable(mission_id)
+
+    if deliverable is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No final deliverable exists for mission "
+                f"{mission_id}."
+            ),
+        )
+
+    return deliverable
+
+
 @router.get("/{mission_id}/worker/status")
 def get_mission_worker_status(mission_id: int):
     worker = get_worker_status()
