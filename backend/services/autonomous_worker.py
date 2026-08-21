@@ -4,6 +4,8 @@ import threading
 from datetime import datetime
 from typing import Any
 
+from app.database.database import get_connection
+from app.services.events import log_event
 from services.executor import execute_next_task, get_tasks
 
 
@@ -52,6 +54,34 @@ def _count_tasks(tasks: list[dict[str, Any]]) -> tuple[int, int]:
     return total, completed
 
 
+def _complete_mission(mission_id: int) -> None:
+    """Persist successful autonomous mission completion."""
+    conn = get_connection()
+
+    try:
+        conn.execute(
+            """
+            UPDATE missions
+            SET
+                status='Completed',
+                progress=100,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (mission_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    log_event(
+        mission_id,
+        "Autonomous Worker",
+        "completed",
+        "All mission tasks completed. Mission marked Completed at 100%.",
+    )
+
+
 def _run_worker(mission_id: int, delay_seconds: float) -> None:
     global _worker_thread
 
@@ -64,6 +94,11 @@ def _run_worker(mission_id: int, delay_seconds: float) -> None:
                 task
                 for task in tasks
                 if task.get("status") == "Pending"
+            ]
+            blocked_tasks = [
+                task
+                for task in tasks
+                if task.get("status") == "Blocked"
             ]
 
             _update_state(
@@ -79,8 +114,24 @@ def _run_worker(mission_id: int, delay_seconds: float) -> None:
                 )
                 return
 
+            if blocked_tasks:
+                blocked_task = blocked_tasks[0]
+
+                _update_state(
+                    status="Blocked",
+                    current_task_id=blocked_task["id"],
+                    last_error="",
+                    last_message=(
+                        f'Task {blocked_task["position"]} requires '
+                        "verified evidence before the mission can continue."
+                    ),
+                )
+                return
+
             if not pending_tasks:
                 if completed == total:
+                    _complete_mission(mission_id)
+
                     _update_state(
                         status="Completed",
                         current_task_id=None,
@@ -111,7 +162,26 @@ def _run_worker(mission_id: int, delay_seconds: float) -> None:
                 last_error="",
             )
 
-            execute_next_task(mission_id)
+            execution = execute_next_task(mission_id)
+
+            if execution.get("status") == "Blocked":
+                refreshed_tasks = get_tasks(mission_id)
+                refreshed_total, refreshed_completed = _count_tasks(
+                    refreshed_tasks
+                )
+
+                _update_state(
+                    status="Blocked",
+                    total_tasks=refreshed_total,
+                    completed_tasks=refreshed_completed,
+                    current_task_id=execution.get("task_id"),
+                    last_error="",
+                    last_message=(
+                        f'Task {execution.get("position")} requires '
+                        "verified evidence before the mission can continue."
+                    ),
+                )
+                return
 
             refreshed_tasks = get_tasks(mission_id)
             refreshed_total, refreshed_completed = _count_tasks(
@@ -183,6 +253,26 @@ def start_worker(
     pending = [
         task for task in tasks if task.get("status") == "Pending"
     ]
+    blocked = [
+        task for task in tasks if task.get("status") == "Blocked"
+    ]
+
+    if blocked:
+        blocked_task = blocked[0]
+
+        _update_state(
+            status="Blocked",
+            mission_id=mission_id,
+            current_task_id=blocked_task["id"],
+            total_tasks=total,
+            completed_tasks=completed,
+            last_message=(
+                f'Task {blocked_task["position"]} requires verified '
+                "evidence before the mission can continue."
+            ),
+            last_error="",
+        )
+        return _snapshot()
 
     if not pending:
         _update_state(

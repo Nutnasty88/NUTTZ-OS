@@ -284,6 +284,188 @@ def _collect_safe_tool_results(task: Any) -> list[dict[str, Any]]:
     ]
 
 
+EVIDENCE_REQUIRED_RULES = (
+    (
+        "External research or source collection requires an approved "
+        "research or network tool.",
+        (
+            r"\b(gather(?:ed|ing)?|collect(?:ed|ing)?|research(?:ed|ing)?|"
+            r"search(?:ed|ing)?|browse(?:d|ing)?|look\s+up|fetch(?:ed|ing)?|"
+            r"download(?:ed|ing)?|scrape(?:d|ing)?)\b"
+        ),
+    ),
+    (
+        "External delivery requires a submission receipt or approved "
+        "delivery-tool result.",
+        (
+            r"\b(submit(?:ted|ting)?|send(?:ing)?|sent|email(?:ed|ing)?|"
+            r"upload(?:ed|ing)?|publish(?:ed|ing)?|deploy(?:ed|ing)?|"
+            r"post(?:ed|ing)?|deliver(?:ed|ing)?)\b"
+        ),
+    ),
+    (
+        "System-changing work requires an approved execution tool result.",
+        (
+            r"\b(run|execute|install|uninstall|start|stop|restart|configure|"
+            r"modify|delete|copy|move|build|implement)\b"
+        ),
+    ),
+    (
+        "File or document production requires a verified artifact.",
+        (
+            r"\b(save|export|render|convert|format|finalize)\b"
+            r".{0,160}\b(file|report|document|pdf|spreadsheet|archive|image)\b"
+        ),
+    ),
+    (
+        "External validation requires evidence from an approved tool.",
+        (
+            r"\b(test|inspect|scan|cross[- ]check|validate|verify|confirm)\b"
+            r".{0,180}\b(files?|systems?|services?|servers?|networks?|"
+            r"websites?|databases?|installations?|deployments?|submissions?|"
+            r"citations?|sources?|facts?|records?)\b"
+        ),
+    ),
+    (
+        "Data-dependent analysis requires verified input data.",
+        (
+            r"\b(analy[sz]e|review|synthesi[sz]e)\b"
+            r".{0,140}\b(data|sources?|documents?|evidence|records?|"
+            r"findings?|information)\b"
+        ),
+    ),
+)
+
+
+def _evidence_requirement(task: Any) -> tuple[str, bool]:
+    """
+    Return the evidence requirement and whether current Safe Tools can
+    satisfy it.
+    """
+    task_text = f"{task['title']}\n{task['instructions']}"
+
+    for reason, pattern in EVIDENCE_REQUIRED_RULES:
+        if re.search(
+            pattern,
+            task_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            return reason, False
+
+    if _task_safe_tool_names(task):
+        return (
+            "The task requests an allowlisted local diagnostic.",
+            True,
+        )
+
+    return "", False
+
+
+def _safe_tool_evidence_verified(
+    results: list[dict[str, Any]],
+) -> bool:
+    return bool(results) and all(
+        result.get("status") == "success"
+        and result.get("exit_code") == 0
+        for result in results
+    )
+
+
+def _block_task_for_missing_evidence(
+    mission_id: int,
+    task: Any,
+    reason: str,
+    tool_results: list[dict[str, Any]],
+    safe_tools_can_satisfy: bool,
+) -> dict[str, Any]:
+    evidence_record = {
+        "required": True,
+        "verified": False,
+        "requirement": reason,
+        "safe_tools_can_satisfy": safe_tools_can_satisfy,
+        "selected_tools": _task_safe_tool_names(task),
+        "tool_results": tool_results,
+    }
+
+    result = (
+        "EVIDENCE GATE: BLOCKED\n\n"
+        "This task was not marked Completed because NUTTZ-OS did not "
+        "receive verified evidence for the requested real-world action.\n\n"
+        f"Requirement: {reason}\n\n"
+        "No language-model statement can substitute for executed tool "
+        "evidence, a verified artifact, or a delivery receipt.\n\n"
+        "EVIDENCE RECORD:\n"
+        + json.dumps(evidence_record, indent=2, sort_keys=True)
+    )
+
+    conn = get_connection()
+
+    try:
+        mission_row = conn.execute(
+            """
+            SELECT progress
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        progress = (
+            int(mission_row["progress"] or 0)
+            if mission_row is not None
+            else 0
+        )
+
+        conn.execute(
+            """
+            UPDATE mission_tasks
+            SET
+                status='Blocked',
+                result=?,
+                completed_at=NULL
+            WHERE id=?
+            """,
+            (result, task["id"]),
+        )
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET
+                status='Blocked',
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (mission_id,),
+        )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    log_event(
+        mission_id,
+        "Evidence Gate",
+        "blocked",
+        f'Task {task["position"]} blocked: verified evidence required.',
+    )
+
+    return {
+        "mission_id": mission_id,
+        "task_id": task["id"],
+        "position": task["position"],
+        "title": task["title"],
+        "status": "Blocked",
+        "result": result,
+        "mission_status": "Blocked",
+        "progress": progress,
+        "tool_results": tool_results,
+        "evidence_required": True,
+        "evidence_verified": False,
+        "model": EXECUTOR_MODEL,
+    }
+
+
 def execute_next_task(mission_id: int) -> dict[str, Any]:
     ensure_task_table()
 
@@ -295,7 +477,8 @@ def execute_next_task(mission_id: int) -> dict[str, Any]:
             SELECT
                 id,
                 title,
-                priority
+                priority,
+                progress
             FROM missions
             WHERE id=?
             """,
@@ -304,6 +487,34 @@ def execute_next_task(mission_id: int) -> dict[str, Any]:
 
         if mission is None:
             raise ValueError(f"Mission {mission_id} was not found.")
+
+        blocked_task = conn.execute(
+            """
+            SELECT
+                id,
+                position,
+                title
+            FROM mission_tasks
+            WHERE
+                mission_id=?
+                AND status='Blocked'
+            ORDER BY position ASC
+            LIMIT 1
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if blocked_task is not None:
+            return {
+                "mission_id": mission_id,
+                "task_id": blocked_task["id"],
+                "position": blocked_task["position"],
+                "title": blocked_task["title"],
+                "status": "Blocked",
+                "message": "A task is waiting for verified evidence.",
+                "mission_status": "Blocked",
+                "progress": int(mission["progress"] or 0),
+            }
 
         task = conn.execute(
             """
@@ -385,7 +596,7 @@ def execute_next_task(mission_id: int) -> dict[str, Any]:
     )
 
     system_prompt = """
-You are Executor Agent v1 inside NUTTZ-OS.
+You are Executor Agent v2 inside NUTTZ-OS.
 
 Complete the assigned task by producing a concrete execution report.
 
@@ -415,6 +626,22 @@ Task instructions:
 """.strip()
 
     safe_tool_results = _collect_safe_tool_results(task)
+    evidence_reason, safe_tools_can_satisfy = (
+        _evidence_requirement(task)
+    )
+    evidence_verified = (
+        safe_tools_can_satisfy
+        and _safe_tool_evidence_verified(safe_tool_results)
+    )
+
+    if evidence_reason and not evidence_verified:
+        return _block_task_for_missing_evidence(
+            mission_id=mission_id,
+            task=task,
+            reason=evidence_reason,
+            tool_results=safe_tool_results,
+            safe_tools_can_satisfy=safe_tools_can_satisfy,
+        )
 
     if safe_tool_results:
         user_prompt += (
