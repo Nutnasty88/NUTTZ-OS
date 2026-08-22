@@ -318,6 +318,25 @@ def generate_mission_deliverable(mission_id: int):
             detail=f"Reporter Agent failed: {error}",
         ) from error
 
+    conn = get_connection()
+
+    try:
+        conn.execute(
+            """
+            UPDATE missions
+            SET
+                status='Completed',
+                progress=100,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+              AND status='Report Error'
+            """,
+            (mission_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
     return {
         "success": True,
         "message": "Final deliverable created.",

@@ -63,6 +63,8 @@ export default function MissionQueue() {
     useState(null);
   const [workerActionMissionId, setWorkerActionMissionId] =
     useState(null);
+  const [reporterActionMissionId, setReporterActionMissionId] =
+    useState(null);
 
   const [openDetailsId, setOpenDetailsId] = useState(null);
   const [openPlanId, setOpenPlanId] = useState(null);
@@ -329,6 +331,63 @@ export default function MissionQueue() {
         ...current,
         [missionId]: error.message,
       }));
+    }
+  }
+
+
+  async function retryReporter(missionId) {
+    setReporterActionMissionId(missionId);
+
+    setErrors((current) => ({
+      ...current,
+      [missionId]: "",
+    }));
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/missions/${missionId}/deliverable`,
+        {
+          method: "POST",
+        },
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail || "Reporter failed to create the deliverable.",
+        );
+      }
+
+      const deliverable = data.deliverable;
+
+      if (!deliverable) {
+        throw new Error(
+          "Reporter completed without returning a deliverable.",
+        );
+      }
+
+      setDeliverablesByMission((current) => ({
+        ...current,
+        [missionId]: deliverable,
+      }));
+
+      setOpenDetailsId(null);
+      setOpenPlanId(null);
+      setOpenResearchId(null);
+      setOpenTasksId(null);
+      setOpenDeliverableId(missionId);
+
+      await loadMissions();
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        [missionId]: error.message,
+      }));
+
+      await loadMissions();
+    } finally {
+      setReporterActionMissionId(null);
     }
   }
 
@@ -635,6 +694,8 @@ export default function MissionQueue() {
         const isExecuting = executingMissionId === mission.id;
         const isWorkerAction =
           workerActionMissionId === mission.id;
+        const isReporterAction =
+          reporterActionMissionId === mission.id;
 
         const details = missionDetails[mission.id];
         const plan = plans[mission.id];
@@ -809,6 +870,38 @@ export default function MissionQueue() {
                 </button>
               )}
 
+              {mission.status === "Report Error" && (
+                <button
+                  type="button"
+                  disabled={
+                    isReporterAction ||
+                    worker.thread_alive
+                  }
+                  onClick={() => retryReporter(mission.id)}
+                  style={{
+                    padding: "7px 13px",
+                    background: isReporterAction
+                      ? "#6b5326"
+                      : "#c58b24",
+                    color: "white",
+                    border: "1px solid #d9a441",
+                    borderRadius: "4px",
+                    cursor: isReporterAction
+                      ? "wait"
+                      : "pointer",
+                    opacity:
+                      isReporterAction ||
+                      worker.thread_alive
+                        ? 0.6
+                        : 1,
+                  }}
+                >
+                  {isReporterAction
+                    ? "Reporter working..."
+                    : "↻ Retry Report"}
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => toggleTasks(mission.id)}
@@ -903,13 +996,15 @@ export default function MissionQueue() {
                       background:
                         details.status === "Completed"
                           ? "rgba(77, 227, 165, 0.12)"
-                          : details.status === "Error"
+                          : details.status === "Error" ||
+                          details.status === "Report Error"
                             ? "rgba(255, 123, 123, 0.12)"
                             : "rgba(85, 167, 255, 0.12)",
                       color:
                         details.status === "Completed"
                           ? "#4de3a5"
-                          : details.status === "Error"
+                          : details.status === "Error" ||
+                          details.status === "Report Error"
                             ? "#ff7b7b"
                             : "#55a7ff",
                       fontSize: "12px",
