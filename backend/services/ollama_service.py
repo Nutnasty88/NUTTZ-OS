@@ -126,14 +126,27 @@ def get_ollama_models() -> dict[str, Any]:
 import urllib.request
 
 
-def chat_with_ollama(model: str, messages: list[dict], stream: bool = False):
-    payload = json.dumps(
-        {
-            "model": model,
-            "messages": messages,
-            "stream": stream,
-        }
-    ).encode("utf-8")
+def chat_with_ollama(
+    model: str,
+    messages: list[dict],
+    stream: bool = False,
+    *,
+    think: bool | None = None,
+    options: dict[str, Any] | None = None,
+):
+    request_payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": stream,
+    }
+
+    if think is not None:
+        request_payload["think"] = think
+
+    if options:
+        request_payload["options"] = options
+
+    payload = json.dumps(request_payload).encode("utf-8")
 
     request = urllib.request.Request(
         f"{OLLAMA_BASE_URL}/api/chat",
