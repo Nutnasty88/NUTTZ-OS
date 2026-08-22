@@ -56,6 +56,118 @@ function workerStatusColor(status) {
 }
 
 
+function missionToneStyle(tone) {
+  const tones = {
+    pending: {
+      color: "#aab8c8",
+      background: "rgba(170, 184, 200, 0.10)",
+      border: "1px solid rgba(170, 184, 200, 0.30)",
+    },
+
+    running: {
+      color: "#55a7ff",
+      background: "rgba(85, 167, 255, 0.10)",
+      border: "1px solid rgba(85, 167, 255, 0.35)",
+    },
+
+    blocked: {
+      color: "#ffd166",
+      background: "rgba(255, 209, 102, 0.10)",
+      border: "1px solid rgba(255, 209, 102, 0.35)",
+    },
+
+    "report-error": {
+      color: "#ff9f6e",
+      background: "rgba(255, 159, 110, 0.10)",
+      border: "1px solid rgba(255, 159, 110, 0.35)",
+    },
+
+    completed: {
+      color: "#4de3a5",
+      background: "rgba(77, 227, 165, 0.10)",
+      border: "1px solid rgba(77, 227, 165, 0.35)",
+    },
+
+    error: {
+      color: "#ff7b7b",
+      background: "rgba(255, 123, 123, 0.10)",
+      border: "1px solid rgba(255, 123, 123, 0.35)",
+    },
+
+    unknown: {
+      color: "#aab8c8",
+      background: "rgba(170, 184, 200, 0.08)",
+      border: "1px solid rgba(170, 184, 200, 0.22)",
+    },
+  };
+
+  return tones[tone] || tones.unknown;
+}
+
+
+function missionPolicy(status) {
+  const policies = {
+    Pending: {
+      canRun: true,
+      canViewReport: false,
+      canRetryReport: false,
+      terminal: false,
+      tone: "pending",
+    },
+
+    Running: {
+      canRun: false,
+      canViewReport: false,
+      canRetryReport: false,
+      terminal: false,
+      tone: "running",
+    },
+
+    Blocked: {
+      canRun: false,
+      canViewReport: false,
+      canRetryReport: false,
+      terminal: false,
+      tone: "blocked",
+    },
+
+    "Report Error": {
+      canRun: false,
+      canViewReport: false,
+      canRetryReport: true,
+      terminal: false,
+      tone: "report-error",
+    },
+
+    Completed: {
+      canRun: true,
+      canViewReport: true,
+      canRetryReport: false,
+      terminal: true,
+      tone: "completed",
+    },
+
+    Error: {
+      canRun: true,
+      canViewReport: false,
+      canRetryReport: false,
+      terminal: true,
+      tone: "error",
+    },
+  };
+
+  return (
+    policies[status] || {
+      canRun: false,
+      canViewReport: false,
+      canRetryReport: false,
+      terminal: false,
+      tone: "unknown",
+    }
+  );
+}
+
+
 export default function MissionQueue() {
   const [missions, setMissions] = useState([]);
   const [runningMissionId, setRunningMissionId] = useState(null);
@@ -764,6 +876,9 @@ export default function MissionQueue() {
       )}
 
       {missions.map((mission) => {
+        const policy = missionPolicy(mission.status);
+        const missionTone = missionToneStyle(policy.tone);
+
         const isPlanning = runningMissionId === mission.id;
         const isExecuting = executingMissionId === mission.id;
         const isWorkerAction =
@@ -832,7 +947,22 @@ export default function MissionQueue() {
               <span>{mission.progress}%</span>
             </div>
 
-            <div className="mission-status">
+            <div
+              className="mission-status"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                marginTop: "6px",
+                padding: "4px 9px",
+                borderRadius: "999px",
+                color: missionTone.color,
+                background: missionTone.background,
+                border: missionTone.border,
+                fontSize: "11px",
+                fontWeight: "700",
+                letterSpacing: "0.4px",
+              }}
+            >
               {mission.status}
             </div>
 
@@ -866,6 +996,7 @@ export default function MissionQueue() {
               <button
                 type="button"
                 disabled={
+                  !policy.canRun ||
                   isPlanning ||
                   isExecuting ||
                   worker.thread_alive
@@ -879,9 +1010,18 @@ export default function MissionQueue() {
                   color: "white",
                   border: "none",
                   borderRadius: "4px",
-                  cursor: isPlanning ? "wait" : "pointer",
+                  cursor:
+                    isPlanning
+                      ? "wait"
+                      : policy.canRun
+                        ? "pointer"
+                        : "not-allowed",
                   opacity:
-                    isPlanning || worker.thread_alive ? 0.65 : 1,
+                    !policy.canRun ||
+                    isPlanning ||
+                    worker.thread_alive
+                      ? 0.65
+                      : 1,
                 }}
               >
                 {isPlanning ? "Planner working..." : "▶ Run"}
@@ -923,7 +1063,7 @@ export default function MissionQueue() {
                   : "View Research"}
               </button>
 
-              {mission.status === "Completed" && (
+              {policy.canViewReport && (
                 <button
                   type="button"
                   onClick={() => toggleDeliverable(mission.id)}
@@ -978,7 +1118,7 @@ export default function MissionQueue() {
                 </button>
               )}
 
-              {mission.status === "Report Error" && (
+              {policy.canRetryReport && (
                 <button
                   type="button"
                   disabled={
