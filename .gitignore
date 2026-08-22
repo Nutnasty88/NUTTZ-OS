@@ -28,3 +28,22 @@ services/caddy/data/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# NUTTZ runtime data
+backend/app/database/*.db
+backend/app/database/*.db-*
+*.sqlite
+*.sqlite3
+
+# Python runtime caches
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+backend/venv/
+
+# Local safety backups
+*.backup
+*.before-*
