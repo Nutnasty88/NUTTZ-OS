@@ -494,6 +494,101 @@ def _block_task_for_missing_evidence(
     }
 
 
+def reset_blocked_task(
+    mission_id: int,
+) -> dict[str, Any]:
+    """Reset only the first blocked task while preserving completed work."""
+    ensure_task_table()
+
+    conn = get_connection()
+
+    try:
+        mission = conn.execute(
+            """
+            SELECT id, status, progress
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if mission is None:
+            raise ValueError(f"Mission {mission_id} was not found.")
+
+        blocked_task = conn.execute(
+            """
+            SELECT
+                id,
+                position,
+                title,
+                result
+            FROM mission_tasks
+            WHERE
+                mission_id=?
+                AND status='Blocked'
+            ORDER BY position ASC
+            LIMIT 1
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if blocked_task is None:
+            raise RuntimeError(
+                f"Mission {mission_id} has no blocked task to reset."
+            )
+
+        conn.execute(
+            """
+            UPDATE mission_tasks
+            SET
+                status='Pending',
+                started_at=NULL,
+                completed_at=NULL
+            WHERE id=?
+              AND status='Blocked'
+            """,
+            (blocked_task["id"],),
+        )
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET
+                status='Running',
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (mission_id,),
+        )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    log_event(
+        mission_id,
+        "Evidence Gate",
+        "reset",
+        (
+            f'Task {blocked_task["position"]} was explicitly reset '
+            "for another verified-evidence attempt."
+        ),
+    )
+
+    return {
+        "mission_id": mission_id,
+        "task_id": blocked_task["id"],
+        "position": blocked_task["position"],
+        "title": blocked_task["title"],
+        "status": "Pending",
+        "mission_status": "Running",
+        "progress": int(mission["progress"] or 0),
+        "previous_evidence_preserved": bool(
+            blocked_task["result"]
+        ),
+    }
+
+
 def execute_next_task(mission_id: int) -> dict[str, Any]:
     ensure_task_table()
 

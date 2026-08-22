@@ -595,6 +595,80 @@ export default function MissionQueue() {
   }
 
 
+  async function retryBlockedTask(missionId) {
+    setWorkerActionMissionId(missionId);
+
+    setErrors((current) => ({
+      ...current,
+      [missionId]: "",
+    }));
+
+    try {
+      const resetResponse = await fetch(
+        `${API_BASE}/missions/${missionId}/tasks/reset-blocked`,
+        {
+          method: "POST",
+        },
+      );
+
+      const resetData = await resetResponse
+        .json()
+        .catch(() => ({}));
+
+      if (!resetResponse.ok) {
+        throw new Error(
+          resetData.detail || "Blocked task reset failed.",
+        );
+      }
+
+      const workerResponse = await fetch(
+        `${API_BASE}/missions/${missionId}/worker/start?delay_seconds=2`,
+        {
+          method: "POST",
+        },
+      );
+
+      const workerData = await workerResponse
+        .json()
+        .catch(() => ({}));
+
+      if (!workerResponse.ok) {
+        throw new Error(
+          workerData.detail ||
+            "Task was reset, but the worker failed to resume.",
+        );
+      }
+
+      setWorker(workerData.worker || EMPTY_WORKER);
+      setTasksByMission((current) => ({
+        ...current,
+        [missionId]: resetData.tasks || [],
+      }));
+
+      setOpenDetailsId(null);
+      setOpenPlanId(null);
+      setOpenResearchId(null);
+      setOpenDeliverableId(null);
+      setOpenTasksId(missionId);
+
+      await Promise.all([
+        loadMissions(),
+        loadTasks(missionId),
+      ]);
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        [missionId]: error.message,
+      }));
+
+      await loadTasks(missionId).catch(() => {});
+      await loadMissions();
+    } finally {
+      setWorkerActionMissionId(null);
+    }
+  }
+
+
   async function startAutonomousWorker(missionId) {
     setWorkerActionMissionId(missionId);
 
@@ -867,6 +941,40 @@ export default function MissionQueue() {
                   {isDeliverableOpen
                     ? "Hide Report"
                     : "View Report"}
+                </button>
+              )}
+
+              {mission.status === "Blocked" && (
+                <button
+                  type="button"
+                  disabled={
+                    isWorkerAction ||
+                    worker.thread_alive
+                  }
+                  onClick={() =>
+                    retryBlockedTask(mission.id)
+                  }
+                  style={{
+                    padding: "7px 13px",
+                    background: isWorkerAction
+                      ? "#6b5326"
+                      : "#d39220",
+                    color: "white",
+                    border: "1px solid #e3ad43",
+                    borderRadius: "4px",
+                    cursor: isWorkerAction
+                      ? "wait"
+                      : "pointer",
+                    opacity:
+                      isWorkerAction ||
+                      worker.thread_alive
+                        ? 0.6
+                        : 1,
+                  }}
+                >
+                  {isWorkerAction
+                    ? "Retrying task..."
+                    : "↻ Retry Blocked Task"}
                 </button>
               )}
 

@@ -5,6 +5,7 @@ from app.database.database import get_connection
 from services.executor import (
     execute_next_task,
     get_tasks,
+    reset_blocked_task,
     sync_tasks,
 )
 from services.planner import create_plan, get_plan
@@ -278,6 +279,47 @@ def sync_mission_tasks(mission_id: int):
         "success": True,
         "mission_id": mission_id,
         "tasks": tasks,
+    }
+
+
+@router.post("/{mission_id}/tasks/reset-blocked")
+def reset_mission_blocked_task(mission_id: int):
+    current_worker = get_worker_status()
+
+    if current_worker.get("thread_alive"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Pause the active Autonomous Worker before resetting "
+                "a blocked task."
+            ),
+        )
+
+    try:
+        reset = reset_blocked_task(mission_id)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=404,
+            detail=str(error),
+        ) from error
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Blocked-task reset failed: {error}",
+        ) from error
+
+    return {
+        "success": True,
+        "message": (
+            f'Task {reset["position"]} was reset to Pending.'
+        ),
+        "reset": reset,
+        "tasks": get_tasks(mission_id),
     }
 
 
