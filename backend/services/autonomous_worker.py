@@ -6,6 +6,7 @@ from typing import Any
 
 from app.database.database import get_connection
 from app.services.events import log_event
+from app.services.reporter import create_deliverable
 from services.executor import execute_next_task, get_tasks
 
 
@@ -55,7 +56,56 @@ def _count_tasks(tasks: list[dict[str, Any]]) -> tuple[int, int]:
 
 
 def _complete_mission(mission_id: int) -> None:
-    """Persist successful autonomous mission completion."""
+    """Finalize a verified mission and generate its deliverable."""
+
+    log_event(
+        mission_id,
+        "Autonomous Worker",
+        "reporting",
+        "All verified tasks completed. Reporter is generating the final deliverable.",
+    )
+
+    try:
+        deliverable = create_deliverable(mission_id)
+    except Exception as error:
+        conn = get_connection()
+
+        try:
+            conn.execute(
+                """
+                UPDATE missions
+                SET
+                    status='Report Error',
+                    progress=100,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+                """,
+                (mission_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        log_event(
+            mission_id,
+            "Autonomous Worker",
+            "error",
+            (
+                "All mission tasks completed, but final deliverable "
+                f"generation failed: {error}"
+            ),
+        )
+
+        raise RuntimeError(
+            "Mission tasks completed successfully, but Reporter "
+            f"failed to create the final deliverable: {error}"
+        ) from error
+
+    if not deliverable:
+        raise RuntimeError(
+            "Reporter returned no final deliverable."
+        )
+
     conn = get_connection()
 
     try:
@@ -78,7 +128,10 @@ def _complete_mission(mission_id: int) -> None:
         mission_id,
         "Autonomous Worker",
         "completed",
-        "All mission tasks completed. Mission marked Completed at 100%.",
+        (
+            "All verified mission tasks completed and the final "
+            "Reporter deliverable was created."
+        ),
     )
 
 
@@ -275,15 +328,47 @@ def start_worker(
         return _snapshot()
 
     if not pending:
-        _update_state(
-            status="Completed" if completed == total else "Idle",
-            mission_id=mission_id,
-            current_task_id=None,
-            total_tasks=total,
-            completed_tasks=completed,
-            last_message="No pending tasks remain.",
-            last_error="",
-        )
+        if completed == total:
+            try:
+                _complete_mission(mission_id)
+            except Exception as error:
+                _update_state(
+                    status="Report Error",
+                    mission_id=mission_id,
+                    current_task_id=None,
+                    total_tasks=total,
+                    completed_tasks=completed,
+                    last_message=(
+                        "All mission tasks are complete, but final "
+                        "deliverable generation failed."
+                    ),
+                    last_error=str(error),
+                )
+                return _snapshot()
+
+            _update_state(
+                status="Completed",
+                mission_id=mission_id,
+                current_task_id=None,
+                total_tasks=total,
+                completed_tasks=completed,
+                last_message=(
+                    "All mission tasks and the final deliverable "
+                    "are complete."
+                ),
+                last_error="",
+            )
+        else:
+            _update_state(
+                status="Idle",
+                mission_id=mission_id,
+                current_task_id=None,
+                total_tasks=total,
+                completed_tasks=completed,
+                last_message="No pending tasks remain.",
+                last_error="",
+            )
+
         return _snapshot()
 
     _stop_event.clear()
