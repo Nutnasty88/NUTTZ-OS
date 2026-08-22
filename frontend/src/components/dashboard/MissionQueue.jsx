@@ -64,13 +64,18 @@ export default function MissionQueue() {
   const [workerActionMissionId, setWorkerActionMissionId] =
     useState(null);
 
+  const [openDetailsId, setOpenDetailsId] = useState(null);
   const [openPlanId, setOpenPlanId] = useState(null);
   const [openResearchId, setOpenResearchId] = useState(null);
   const [openTasksId, setOpenTasksId] = useState(null);
+  const [openDeliverableId, setOpenDeliverableId] = useState(null);
 
+  const [missionDetails, setMissionDetails] = useState({});
   const [plans, setPlans] = useState({});
   const [researchByMission, setResearchByMission] = useState({});
   const [tasksByMission, setTasksByMission] = useState({});
+  const [deliverablesByMission, setDeliverablesByMission] =
+    useState({});
   const [errors, setErrors] = useState({});
   const [worker, setWorker] = useState(EMPTY_WORKER);
 
@@ -97,6 +102,50 @@ export default function MissionQueue() {
     } catch (error) {
       console.error("Mission loading error:", error);
     }
+  }, []);
+
+
+  const loadMissionDetails = useCallback(async (missionId) => {
+    const response = await fetch(
+      `${API_BASE}/missions/${missionId}`,
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(
+        data.detail || "Failed to load mission details.",
+      );
+    }
+
+    setMissionDetails((current) => ({
+      ...current,
+      [missionId]: data,
+    }));
+
+    return data;
+  }, []);
+
+
+  const loadDeliverable = useCallback(async (missionId) => {
+    const response = await fetch(
+      `${API_BASE}/missions/${missionId}/deliverable`,
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(
+        data.detail || "No final deliverable was found.",
+      );
+    }
+
+    setDeliverablesByMission((current) => ({
+      ...current,
+      [missionId]: data,
+    }));
+
+    return data;
   }, []);
 
 
@@ -252,6 +301,71 @@ export default function MissionQueue() {
   }
 
 
+  async function toggleDetails(missionId) {
+    if (openDetailsId === missionId) {
+      setOpenDetailsId(null);
+      return;
+    }
+
+    setErrors((current) => ({
+      ...current,
+      [missionId]: "",
+    }));
+
+    setOpenPlanId(null);
+    setOpenResearchId(null);
+    setOpenTasksId(null);
+    setOpenDeliverableId(null);
+
+    try {
+      await Promise.all([
+        loadMissionDetails(missionId),
+        loadTasks(missionId),
+      ]);
+
+      setOpenDetailsId(missionId);
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        [missionId]: error.message,
+      }));
+    }
+  }
+
+
+  async function toggleDeliverable(missionId) {
+    if (openDeliverableId === missionId) {
+      setOpenDeliverableId(null);
+      return;
+    }
+
+    setErrors((current) => ({
+      ...current,
+      [missionId]: "",
+    }));
+
+    setOpenDetailsId(null);
+    setOpenPlanId(null);
+    setOpenResearchId(null);
+    setOpenTasksId(null);
+
+    if (deliverablesByMission[missionId]) {
+      setOpenDeliverableId(missionId);
+      return;
+    }
+
+    try {
+      await loadDeliverable(missionId);
+      setOpenDeliverableId(missionId);
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        [missionId]: error.message,
+      }));
+    }
+  }
+
+
   async function togglePlan(missionId) {
     if (openPlanId === missionId) {
       setOpenPlanId(null);
@@ -263,6 +377,7 @@ export default function MissionQueue() {
       [missionId]: "",
     }));
 
+    setOpenDetailsId(null);
     setOpenResearchId(null);
     setOpenTasksId(null);
 
@@ -310,6 +425,7 @@ export default function MissionQueue() {
       [missionId]: "",
     }));
 
+    setOpenDetailsId(null);
     setOpenPlanId(null);
     setOpenTasksId(null);
 
@@ -357,6 +473,7 @@ export default function MissionQueue() {
       [missionId]: "",
     }));
 
+    setOpenDetailsId(null);
     setOpenPlanId(null);
     setOpenResearchId(null);
 
@@ -519,6 +636,7 @@ export default function MissionQueue() {
         const isWorkerAction =
           workerActionMissionId === mission.id;
 
+        const details = missionDetails[mission.id];
         const plan = plans[mission.id];
         const research = researchByMission[mission.id];
         const researchReport = research?.report || {};
@@ -538,11 +656,15 @@ export default function MissionQueue() {
           ? researchReport.risks
           : [];
         const tasks = tasksByMission[mission.id] || [];
+        const deliverable = deliverablesByMission[mission.id];
 
+        const areDetailsOpen = openDetailsId === mission.id;
         const isPlanOpen = openPlanId === mission.id;
         const isResearchOpen =
           openResearchId === mission.id;
         const areTasksOpen = openTasksId === mission.id;
+        const isDeliverableOpen =
+          openDeliverableId === mission.id;
 
         const completedTasks = tasks.filter(
           (task) => task.status === "Completed",
@@ -587,6 +709,25 @@ export default function MissionQueue() {
                 marginTop: "10px",
               }}
             >
+              <button
+                type="button"
+                onClick={() => toggleDetails(mission.id)}
+                style={{
+                  padding: "7px 13px",
+                  background: areDetailsOpen
+                    ? "#355f9b"
+                    : "#253246",
+                  color: "white",
+                  border: "1px solid #476f9f",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                }}
+              >
+                {areDetailsOpen
+                  ? "Hide Details"
+                  : "Mission Details"}
+              </button>
+
               <button
                 type="button"
                 disabled={
@@ -647,6 +788,27 @@ export default function MissionQueue() {
                   : "View Research"}
               </button>
 
+              {mission.status === "Completed" && (
+                <button
+                  type="button"
+                  onClick={() => toggleDeliverable(mission.id)}
+                  style={{
+                    padding: "7px 13px",
+                    background: isDeliverableOpen
+                      ? "#c58b24"
+                      : "#253246",
+                    color: "white",
+                    border: "1px solid #9b762f",
+                    borderRadius: "4px",
+                    cursor: "pointer",
+                  }}
+                >
+                  {isDeliverableOpen
+                    ? "Hide Report"
+                    : "View Report"}
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => toggleTasks(mission.id)}
@@ -689,6 +851,288 @@ export default function MissionQueue() {
                 }}
               />
             </div>
+
+            {areDetailsOpen && details && (
+              <div
+                style={{
+                  marginTop: "14px",
+                  padding: "15px",
+                  background:
+                    "linear-gradient(180deg, rgba(11, 25, 45, 0.97), rgba(7, 16, 30, 0.97))",
+                  border: "1px solid #476f9f",
+                  borderRadius: "8px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    flexWrap: "wrap",
+                    gap: "12px",
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        color: "#7eb6ff",
+                        fontSize: "11px",
+                        letterSpacing: "1.2px",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      Mission #{details.id}
+                    </div>
+
+                    <strong
+                      style={{
+                        display: "block",
+                        marginTop: "4px",
+                        color: "#eef6ff",
+                        fontSize: "16px",
+                      }}
+                    >
+                      {details.title}
+                    </strong>
+                  </div>
+
+                  <span
+                    style={{
+                      padding: "5px 9px",
+                      borderRadius: "999px",
+                      background:
+                        details.status === "Completed"
+                          ? "rgba(77, 227, 165, 0.12)"
+                          : details.status === "Error"
+                            ? "rgba(255, 123, 123, 0.12)"
+                            : "rgba(85, 167, 255, 0.12)",
+                      color:
+                        details.status === "Completed"
+                          ? "#4de3a5"
+                          : details.status === "Error"
+                            ? "#ff7b7b"
+                            : "#55a7ff",
+                      fontSize: "12px",
+                      fontWeight: "700",
+                    }}
+                  >
+                    {details.status}
+                  </span>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns:
+                      "repeat(auto-fit, minmax(110px, 1fr))",
+                    gap: "8px",
+                    marginTop: "14px",
+                  }}
+                >
+                  {[
+                    ["Progress", `${details.progress ?? 0}%`],
+                    ["Agent", details.agent || "Unassigned"],
+                    ["Priority", details.priority || "Normal"],
+                    ["Tasks", tasks.length],
+                    ["Completed", completedTasks],
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      style={{
+                        padding: "9px",
+                        background: "rgba(18, 37, 61, 0.8)",
+                        border: "1px solid rgba(104, 145, 190, 0.22)",
+                        borderRadius: "6px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          color: "#8399b0",
+                          fontSize: "10px",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.7px",
+                        }}
+                      >
+                        {label}
+                      </div>
+
+                      <div
+                        style={{
+                          marginTop: "4px",
+                          color: "#e6f0fa",
+                          fontSize: "13px",
+                          fontWeight: "700",
+                        }}
+                      >
+                        {value}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div
+                  style={{
+                    marginTop: "15px",
+                    paddingTop: "13px",
+                    borderTop:
+                      "1px solid rgba(104, 145, 190, 0.22)",
+                  }}
+                >
+                  <strong
+                    style={{
+                      color: "#9dc7ff",
+                      fontSize: "12px",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.9px",
+                    }}
+                  >
+                    Task Execution
+                  </strong>
+
+                  {tasks.length === 0 ? (
+                    <div
+                      style={{
+                        marginTop: "10px",
+                        color: "#8fa2b7",
+                        fontSize: "12px",
+                      }}
+                    >
+                      No task chain has been created for this mission.
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: "9px" }}>
+                      {tasks.map((task) => (
+                        <div
+                          key={`summary-${task.id}`}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "9px",
+                            padding: "7px 0",
+                            borderBottom:
+                              "1px solid rgba(104, 145, 190, 0.12)",
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: "19px",
+                              color: taskStatusColor(task.status),
+                              fontWeight: "700",
+                              textAlign: "center",
+                            }}
+                          >
+                            {task.status === "Completed"
+                              ? "✓"
+                              : task.status === "Running"
+                                ? "▶"
+                                : task.status === "Error"
+                                  ? "!"
+                                  : "○"}
+                          </span>
+
+                          <span
+                            style={{
+                              minWidth: "18px",
+                              color: "#778da5",
+                              fontSize: "11px",
+                            }}
+                          >
+                            {task.position}
+                          </span>
+
+                          <span
+                            style={{
+                              flex: 1,
+                              color: "#d8e5f2",
+                              fontSize: "12px",
+                            }}
+                          >
+                            {task.title}
+                          </span>
+
+                          <span
+                            style={{
+                              color: taskStatusColor(task.status),
+                              fontSize: "10px",
+                            }}
+                          >
+                            {task.status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {isDeliverableOpen && deliverable && (
+              <div
+                style={{
+                  marginTop: "14px",
+                  padding: "16px",
+                  background:
+                    "linear-gradient(180deg, rgba(39, 30, 11, 0.96), rgba(22, 17, 8, 0.96))",
+                  border: "1px solid #c58b24",
+                  borderRadius: "8px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    gap: "10px",
+                    marginBottom: "13px",
+                  }}
+                >
+                  <strong
+                    style={{
+                      color: "#ffd477",
+                      fontSize: "14px",
+                    }}
+                  >
+                    Reporter Agent · Final Deliverable
+                  </strong>
+
+                  <span
+                    style={{
+                      color: "#c7b486",
+                      fontSize: "12px",
+                    }}
+                  >
+                    {deliverable.model} · {deliverable.status}
+                  </span>
+                </div>
+
+                <div
+                  style={{
+                    color: "#f1ead9",
+                    whiteSpace: "pre-wrap",
+                    lineHeight: 1.65,
+                    fontSize: "13px",
+                  }}
+                >
+                  {deliverable.content}
+                </div>
+
+                {deliverable.updated_at && (
+                  <div
+                    style={{
+                      marginTop: "14px",
+                      paddingTop: "10px",
+                      borderTop:
+                        "1px solid rgba(197, 139, 36, 0.25)",
+                      color: "#9f9275",
+                      fontSize: "10px",
+                    }}
+                  >
+                    Updated {deliverable.updated_at}
+                  </div>
+                )}
+              </div>
+            )}
 
             {isPlanOpen && plan && (
               <div
