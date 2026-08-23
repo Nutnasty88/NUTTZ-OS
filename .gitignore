@@ -47,3 +47,6 @@ backend/venv/
 # Local safety backups
 *.backup
 *.before-*
+
+# Builder Agent isolated workspaces
+builder-workspaces/
