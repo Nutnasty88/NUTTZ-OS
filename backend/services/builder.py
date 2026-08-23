@@ -347,3 +347,231 @@ Create the files required to complete this task.
         )
 
         raise
+
+
+def repair_artifact(
+    mission_id: int,
+    mission_title: str,
+    task_id: int,
+    task_position: int,
+    task_title: str,
+    task_instructions: str,
+    artifact_path: str,
+    execution_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Repair one failed Builder artifact using verified execution evidence.
+
+    Builder proposes complete replacement contents.
+    Workspace Manager performs and verifies the actual write.
+    """
+    workspace_name = _workspace_name(mission_id)
+
+    if not isinstance(execution_evidence, dict):
+        raise RuntimeError(
+            "Builder repair requires structured execution evidence."
+        )
+
+    if execution_evidence.get("verified"):
+        raise RuntimeError(
+            "Builder repair was requested for an already verified artifact."
+        )
+
+    current_artifact = read_workspace_file(
+        workspace_name,
+        artifact_path,
+    )
+
+    current_content = current_artifact["content"]
+
+    log_event(
+        mission_id,
+        "Builder",
+        "repairing",
+        (
+            f"Builder repairing task {task_position} artifact "
+            f"{artifact_path} from verified execution failure"
+        ),
+    )
+
+    system_prompt = """
+You are Builder Agent v1 repair mode inside NUTTZ-OS.
+
+A Python artifact in an isolated Builder workspace was executed by the
+NUTTZ-OS Workspace Executor and failed verification.
+
+Repair the artifact using the supplied execution evidence.
+
+You do NOT have direct filesystem or execution access.
+
+NUTTZ-OS will validate and write the replacement through Workspace
+Manager and independently execute it again afterward.
+
+Return JSON only.
+
+Required format:
+
+{
+  "summary": "short description of the repair",
+  "files": [
+    {
+      "path": "relative/path/to/file.py",
+      "content": "complete replacement file contents"
+    }
+  ]
+}
+
+Rules:
+- Return valid JSON only.
+- Do not use markdown code fences.
+- Do not reveal internal reasoning.
+- Do not include <think> tags.
+- Repair only the supplied artifact.
+- Return exactly one file.
+- The path must exactly match the supplied artifact path.
+- Return complete replacement contents, not a patch.
+- Treat stdout, stderr, exit code and timeout data as factual evidence.
+- Do not invent execution results.
+- Do not claim the repair succeeded.
+""".strip()
+
+    evidence_json = json.dumps(
+        execution_evidence,
+        indent=2,
+        sort_keys=True,
+    )
+
+    user_prompt = f"""
+Mission ID: {mission_id}
+Mission title: {mission_title}
+
+Task ID: {task_id}
+Task number: {task_position}
+Task title: {task_title}
+
+Original task instructions:
+{task_instructions}
+
+Artifact requiring repair:
+{artifact_path}
+
+Current artifact SHA256:
+{current_artifact["sha256"]}
+
+Current artifact contents:
+--- BEGIN CURRENT ARTIFACT ---
+{current_content}
+--- END CURRENT ARTIFACT ---
+
+Verified Workspace Executor failure evidence:
+{evidence_json}
+
+Repair this artifact so NUTTZ-OS can execute it again.
+""".strip()
+
+    try:
+        response = chat_with_ollama(
+            model=BUILDER_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                },
+            ],
+            stream=False,
+            think=False,
+        )
+
+        content = _extract_content(response)
+        repair_plan = _parse_builder_response(content)
+
+        files = repair_plan["files"]
+
+        if len(files) != 1:
+            raise RuntimeError(
+                "Builder repair must return exactly one file."
+            )
+
+        file_entry = files[0]
+
+        if file_entry["path"] != artifact_path:
+            raise RuntimeError(
+                "Builder repair attempted to modify a different artifact."
+            )
+
+        write_result = write_workspace_file(
+            workspace_name,
+            artifact_path,
+            file_entry["content"],
+        )
+
+        verification = read_workspace_file(
+            workspace_name,
+            artifact_path,
+        )
+
+        if verification["sha256"] != write_result["sha256"]:
+            raise RuntimeError(
+                "Builder repair artifact verification failed."
+            )
+
+        if verification["sha256"] == current_artifact["sha256"]:
+            raise RuntimeError(
+                "Builder repair did not change the failed artifact."
+            )
+
+        repair_evidence = {
+            "type": "builder_workspace_repair",
+            "verified": True,
+            "workspace": workspace_name,
+            "artifact": artifact_path,
+            "previous_sha256": current_artifact["sha256"],
+            "repaired_sha256": verification["sha256"],
+            "size_bytes": verification["size_bytes"],
+        }
+
+        log_event(
+            mission_id,
+            "Builder",
+            "repaired",
+            (
+                f"Builder repaired task {task_position} artifact "
+                f"{artifact_path}"
+            ),
+        )
+
+        return {
+            "mission_id": mission_id,
+            "task_id": task_id,
+            "position": task_position,
+            "title": task_title,
+            "status": "Repaired",
+            "model": BUILDER_MODEL,
+            "summary": repair_plan["summary"],
+            "workspace": workspace_name,
+            "artifact": {
+                "path": artifact_path,
+                "created": write_result["created"],
+                "size_bytes": verification["size_bytes"],
+                "sha256": verification["sha256"],
+                "verified": True,
+            },
+            "evidence": repair_evidence,
+        }
+
+    except Exception as error:
+        log_event(
+            mission_id,
+            "Builder",
+            "repair_error",
+            (
+                f"Builder failed repair for task {task_position} "
+                f"artifact {artifact_path}: {error}"
+            ),
+        )
+
+        raise

@@ -4,7 +4,7 @@ from typing import Any
 
 from app.database.database import get_connection
 from app.services.events import log_event
-from services.builder import build_task
+from services.builder import build_task, repair_artifact
 from services.ollama_service import chat_with_ollama
 from services.tool_runner import run_tool
 from services.workspace_executor import execute_python_artifact
@@ -383,12 +383,58 @@ def _complete_workspace_execution_task(
             artifact_path,
         )
 
+        repair_result = None
+        initial_evidence = None
+
+        if not evidence.get("verified"):
+            initial_evidence = evidence
+
+            log_event(
+                mission_id,
+                "Workspace Executor",
+                "repairing",
+                (
+                    f"Task {task['position']} execution failed. "
+                    "Builder is attempting one automatic repair."
+                ),
+            )
+
+            repair_result = repair_artifact(
+                mission_id=mission_id,
+                mission_title=mission["title"],
+                task_id=task["id"],
+                task_position=task["position"],
+                task_title=task["title"],
+                task_instructions=task["instructions"],
+                artifact_path=artifact_path,
+                execution_evidence=evidence,
+            )
+
+            log_event(
+                mission_id,
+                "Workspace Executor",
+                "retesting",
+                (
+                    f"Task {task['position']} repaired artifact "
+                    f"{artifact_path}; executing again"
+                ),
+            )
+
+            evidence = execute_python_artifact(
+                mission_id,
+                artifact_path,
+            )
+
         if not evidence.get("verified"):
             raise RuntimeError(
-                "Workspace artifact execution did not verify "
-                "successfully.\n\n"
+                "Workspace artifact failed execution after one "
+                "automatic Builder repair attempt.\n\n"
                 + json.dumps(
-                    evidence,
+                    {
+                        "initial_execution": initial_evidence,
+                        "repair": repair_result,
+                        "final_execution": evidence,
+                    },
                     indent=2,
                     sort_keys=True,
                 )
@@ -403,8 +449,29 @@ def _complete_workspace_execution_task(
             "WORKSPACE EXECUTION: VERIFIED\n\n"
             f"Artifact: {artifact_path}\n"
             f"Exit code: {evidence.get('exit_code')}\n"
-            f"Stdout: {evidence.get('stdout', '').strip()}\n\n"
-            "VERIFIED EXECUTION EVIDENCE:\n"
+            f"Stdout: {evidence.get('stdout', '').strip()}\n"
+        )
+
+        if repair_result:
+            result += (
+                "\nAUTO REPAIR: SUCCESS\n"
+                f"{repair_result.get('summary', 'Artifact repaired.')}\n"
+                "\nINITIAL EXECUTION EVIDENCE:\n"
+                + json.dumps(
+                    initial_evidence,
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n\nREPAIR EVIDENCE:\n"
+                + json.dumps(
+                    repair_result.get("evidence", {}),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+
+        result += (
+            "\n\nVERIFIED EXECUTION EVIDENCE:\n"
             + json.dumps(
                 evidence,
                 indent=2,
@@ -539,6 +606,8 @@ def _complete_workspace_execution_task(
         "progress": progress,
         "tool_results": [],
         "evidence": evidence,
+        "repair": repair_result,
+        "initial_evidence": initial_evidence,
         "agent": "Workspace Executor",
     }
 
