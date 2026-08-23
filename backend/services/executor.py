@@ -4,6 +4,7 @@ from typing import Any
 
 from app.database.database import get_connection
 from app.services.events import log_event
+from services.builder import build_task
 from services.ollama_service import chat_with_ollama
 from services.tool_runner import run_tool
 
@@ -254,6 +255,241 @@ def extract_result(response: dict[str, Any]) -> str:
 
     return result
 
+
+
+BUILDER_TASK_PATTERN = re.compile(
+    r"""
+    \b(
+        build|
+        implement|
+        create|
+        generate|
+        write|
+        scaffold|
+        code|
+        develop|
+        modify|
+        update
+    )\b
+    .{0,180}
+    \b(
+        file|
+        files|
+        code|
+        script|
+        program|
+        application|
+        app|
+        module|
+        package|
+        component|
+        project|
+        source|
+        artifact
+    )\b
+    """,
+    flags=re.IGNORECASE | re.DOTALL | re.VERBOSE,
+)
+
+
+def _is_builder_task(task: Any) -> bool:
+    """Return True only for tasks that explicitly request build artifacts."""
+    task_text = (
+        f"{task['title']}\n"
+        f"{task['instructions']}"
+    )
+
+    return bool(BUILDER_TASK_PATTERN.search(task_text))
+
+
+def _complete_builder_task(
+    mission: Any,
+    task: Any,
+) -> dict[str, Any]:
+    """Execute a Builder task and persist its verified artifacts."""
+    mission_id = int(mission["id"])
+
+    log_event(
+        mission_id,
+        "Executor",
+        "routing",
+        (
+            f"Task {task['position']} routed to Builder Agent "
+            "for isolated workspace execution"
+        ),
+    )
+
+    try:
+        builder_result = build_task(
+            mission_id=mission_id,
+            mission_title=mission["title"],
+            task_id=task["id"],
+            task_position=task["position"],
+            task_title=task["title"],
+            task_instructions=task["instructions"],
+        )
+
+        evidence = builder_result.get("evidence", {})
+
+        if builder_result.get("status") != "Completed":
+            raise RuntimeError(
+                "Builder Agent did not complete the task."
+            )
+
+        if not evidence.get("verified"):
+            raise RuntimeError(
+                "Builder Agent returned no verified artifact evidence."
+            )
+
+        artifacts = builder_result.get("artifacts", [])
+
+        if not artifacts:
+            raise RuntimeError(
+                "Builder Agent completed without creating artifacts."
+            )
+
+        result = (
+            "BUILDER AGENT: COMPLETED\n\n"
+            f"{builder_result.get('summary', 'Builder task completed.')}\n\n"
+            "VERIFIED BUILDER EVIDENCE:\n"
+            + json.dumps(
+                evidence,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+
+    except Exception as error:
+        conn = get_connection()
+
+        try:
+            conn.execute(
+                """
+                UPDATE mission_tasks
+                SET
+                    status='Error',
+                    result=?
+                WHERE id=?
+                """,
+                (str(error), task["id"]),
+            )
+
+            conn.execute(
+                """
+                UPDATE missions
+                SET
+                    status='Error',
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+                """,
+                (mission_id,),
+            )
+
+            conn.commit()
+        finally:
+            conn.close()
+
+        log_event(
+            mission_id,
+            "Executor",
+            "error",
+            (
+                f"Builder Agent failed task "
+                f"{task['position']}: {error}"
+            ),
+        )
+
+        raise
+
+    conn = get_connection()
+
+    try:
+        conn.execute(
+            """
+            UPDATE mission_tasks
+            SET
+                status='Completed',
+                result=?,
+                completed_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (result, task["id"]),
+        )
+
+        counts = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(
+                    CASE
+                        WHEN status='Completed' THEN 1
+                        ELSE 0
+                    END
+                ) AS completed
+            FROM mission_tasks
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        total = counts["total"] or 1
+        completed = counts["completed"] or 0
+
+        progress = 20 + int(
+            (completed / total) * 80
+        )
+
+        mission_status = (
+            "Completed"
+            if completed == total
+            else "Running"
+        )
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET
+                status=?,
+                progress=?,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (
+                mission_status,
+                progress,
+                mission_id,
+            ),
+        )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    log_event(
+        mission_id,
+        "Executor",
+        "completed",
+        (
+            f"Builder task {task['position']} completed "
+            f"with {len(artifacts)} verified artifact(s)"
+        ),
+    )
+
+    return {
+        "mission_id": mission_id,
+        "task_id": task["id"],
+        "position": task["position"],
+        "title": task["title"],
+        "status": "Completed",
+        "result": result,
+        "mission_status": mission_status,
+        "progress": progress,
+        "tool_results": [],
+        "builder": builder_result,
+        "evidence": evidence,
+        "model": builder_result.get("model"),
+        "agent": "Builder",
+    }
 
 
 SAFE_TOOL_RULES = (
@@ -717,6 +953,12 @@ def execute_next_task(mission_id: int) -> dict[str, Any]:
         "started",
         "Task execution started",
     )
+
+    if _is_builder_task(task):
+        return _complete_builder_task(
+            mission=mission,
+            task=task,
+        )
 
     system_prompt = """
 You are Executor Agent v2 inside NUTTZ-OS.
