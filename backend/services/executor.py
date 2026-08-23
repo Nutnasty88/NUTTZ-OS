@@ -7,6 +7,8 @@ from app.services.events import log_event
 from services.builder import build_task
 from services.ollama_service import chat_with_ollama
 from services.tool_runner import run_tool
+from services.workspace_executor import execute_python_artifact
+from services.workspace_manager import list_workspace_files
 
 
 EXECUTOR_MODEL = "qwen3:8b"
@@ -257,6 +259,290 @@ def extract_result(response: dict[str, Any]) -> str:
 
 
 
+WORKSPACE_EXECUTION_PATTERN = re.compile(
+    r"""
+    \b(
+        run|
+        execute|
+        test|
+        verify
+    )\b
+    .{0,220}
+    \b(
+        python|
+        \.py|
+        script|
+        program
+    )\b
+    """,
+    flags=re.IGNORECASE | re.DOTALL | re.VERBOSE,
+)
+
+
+PYTHON_ARTIFACT_PATTERN = re.compile(
+    r"""
+    (?P<path>
+        [A-Za-z0-9_.\-/]+
+        \.py
+    )
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _is_workspace_execution_task(task: Any) -> bool:
+    """Detect explicit requests to execute a Python Builder artifact."""
+    task_text = (
+        f"{task['title']}\n"
+        f"{task['instructions']}"
+    )
+
+    return bool(
+        WORKSPACE_EXECUTION_PATTERN.search(task_text)
+    )
+
+
+def _select_python_artifact(
+    mission_id: int,
+    task: Any,
+) -> str:
+    """
+    Resolve the Python artifact deterministically.
+
+    Prefer an explicit .py path in the task. Otherwise v1 requires
+    exactly one Python artifact in the mission workspace.
+    """
+    task_text = (
+        f"{task['title']}\n"
+        f"{task['instructions']}"
+    )
+
+    explicit_matches = [
+        match.group("path")
+        for match in PYTHON_ARTIFACT_PATTERN.finditer(
+            task_text
+        )
+    ]
+
+    if explicit_matches:
+        return explicit_matches[0]
+
+    workspace_name = f"mission-{mission_id}"
+
+    listing = list_workspace_files(
+        workspace_name
+    )
+
+    python_files = [
+        item["path"]
+        for item in listing.get("files", [])
+        if isinstance(item, dict)
+        and str(item.get("path", "")).lower().endswith(".py")
+    ]
+
+    if not python_files:
+        raise RuntimeError(
+            "Workspace execution requested, but no Python "
+            "artifact exists in the mission workspace."
+        )
+
+    if len(python_files) != 1:
+        raise RuntimeError(
+            "Workspace Executor v1 requires exactly one Python "
+            "artifact when the task does not name a specific file."
+        )
+
+    return python_files[0]
+
+
+def _complete_workspace_execution_task(
+    mission: Any,
+    task: Any,
+) -> dict[str, Any]:
+    """Execute and persist verified Builder workspace evidence."""
+    mission_id = int(mission["id"])
+
+    artifact_path = _select_python_artifact(
+        mission_id,
+        task,
+    )
+
+    log_event(
+        mission_id,
+        "Executor",
+        "routing",
+        (
+            f"Task {task['position']} routed to Workspace Executor "
+            f"for verified execution of {artifact_path}"
+        ),
+    )
+
+    try:
+        evidence = execute_python_artifact(
+            mission_id,
+            artifact_path,
+        )
+
+        if not evidence.get("verified"):
+            raise RuntimeError(
+                "Workspace artifact execution did not verify "
+                "successfully.\n\n"
+                + json.dumps(
+                    evidence,
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+
+        if evidence.get("exit_code") != 0:
+            raise RuntimeError(
+                "Workspace artifact returned a non-zero exit code."
+            )
+
+        result = (
+            "WORKSPACE EXECUTION: VERIFIED\n\n"
+            f"Artifact: {artifact_path}\n"
+            f"Exit code: {evidence.get('exit_code')}\n"
+            f"Stdout: {evidence.get('stdout', '').strip()}\n\n"
+            "VERIFIED EXECUTION EVIDENCE:\n"
+            + json.dumps(
+                evidence,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+
+    except Exception as error:
+        conn = get_connection()
+
+        try:
+            conn.execute(
+                """
+                UPDATE mission_tasks
+                SET
+                    status='Error',
+                    result=?
+                WHERE id=?
+                """,
+                (str(error), task["id"]),
+            )
+
+            conn.execute(
+                """
+                UPDATE missions
+                SET
+                    status='Error',
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+                """,
+                (mission_id,),
+            )
+
+            conn.commit()
+        finally:
+            conn.close()
+
+        log_event(
+            mission_id,
+            "Workspace Executor",
+            "error",
+            (
+                f"Execution verification failed for task "
+                f"{task['position']}: {error}"
+            ),
+        )
+
+        raise
+
+    conn = get_connection()
+
+    try:
+        conn.execute(
+            """
+            UPDATE mission_tasks
+            SET
+                status='Completed',
+                result=?,
+                completed_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (result, task["id"]),
+        )
+
+        counts = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(
+                    CASE
+                        WHEN status='Completed' THEN 1
+                        ELSE 0
+                    END
+                ) AS completed
+            FROM mission_tasks
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        total = counts["total"] or 1
+        completed = counts["completed"] or 0
+
+        progress = 20 + int(
+            (completed / total) * 80
+        )
+
+        mission_status = (
+            "Completed"
+            if completed == total
+            else "Running"
+        )
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET
+                status=?,
+                progress=?,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (
+                mission_status,
+                progress,
+                mission_id,
+            ),
+        )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    log_event(
+        mission_id,
+        "Workspace Executor",
+        "completed",
+        (
+            f"Task {task['position']} verified {artifact_path}: "
+            f"exit code {evidence['exit_code']}"
+        ),
+    )
+
+    return {
+        "mission_id": mission_id,
+        "task_id": task["id"],
+        "position": task["position"],
+        "title": task["title"],
+        "status": "Completed",
+        "result": result,
+        "mission_status": mission_status,
+        "progress": progress,
+        "tool_results": [],
+        "evidence": evidence,
+        "agent": "Workspace Executor",
+    }
+
+
 BUILDER_TASK_PATTERN = re.compile(
     r"""
     \b(
@@ -269,7 +555,12 @@ BUILDER_TASK_PATTERN = re.compile(
         code|
         develop|
         modify|
-        update
+        update|
+        save|
+        edit|
+        append|
+        replace|
+        rewrite
     )\b
     .{0,180}
     \b(
@@ -956,6 +1247,12 @@ def execute_next_task(mission_id: int) -> dict[str, Any]:
 
     if _is_builder_task(task):
         return _complete_builder_task(
+            mission=mission,
+            task=task,
+        )
+
+    if _is_workspace_execution_task(task):
+        return _complete_workspace_execution_task(
             mission=mission,
             task=task,
         )
