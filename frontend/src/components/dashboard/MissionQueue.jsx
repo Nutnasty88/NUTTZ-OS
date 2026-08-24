@@ -168,8 +168,191 @@ function missionPolicy(status) {
 }
 
 
+function parseWorkspaceExecutionResult(result) {
+  if (
+    typeof result !== "string" ||
+    !result.includes("WORKSPACE EXECUTION:")
+  ) {
+    return null;
+  }
+
+  const artifactMatch = result.match(
+    /^Artifact:\s*(.+)$/m,
+  );
+
+  const exitCodeMatch = result.match(
+    /^Exit code:\s*(-?\d+)$/m,
+  );
+
+  const stdoutMatch = result.match(
+    /^Stdout:\s*(.*)$/m,
+  );
+
+  const repairMatch = result.match(
+    /AUTO REPAIR:\s*SUCCESS\s*\n([^\n]*)/,
+  );
+
+  return {
+    verified: result.includes(
+      "WORKSPACE EXECUTION: VERIFIED",
+    ),
+    artifact: artifactMatch
+      ? artifactMatch[1].trim()
+      : "",
+    exitCode: exitCodeMatch
+      ? Number(exitCodeMatch[1])
+      : null,
+    stdout: stdoutMatch
+      ? stdoutMatch[1].trim()
+      : "",
+    repaired: Boolean(repairMatch),
+    repairSummary: repairMatch
+      ? repairMatch[1].trim()
+      : "",
+    raw: result,
+  };
+}
+
+
+function WorkspaceExecutionEvidence({ result }) {
+  const execution = parseWorkspaceExecutionResult(result);
+
+  if (!execution) {
+    return null;
+  }
+
+  return (
+    <div
+      style={{
+        marginTop: "10px",
+        padding: "12px",
+        borderRadius: "6px",
+        background: execution.verified
+          ? "rgba(77, 227, 165, 0.08)"
+          : "rgba(255, 123, 123, 0.08)",
+        border: execution.verified
+          ? "1px solid rgba(77, 227, 165, 0.30)"
+          : "1px solid rgba(255, 123, 123, 0.30)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          flexWrap: "wrap",
+          marginBottom: "9px",
+        }}
+      >
+        <strong>Workspace Executor</strong>
+
+        <span
+          style={{
+            padding: "2px 7px",
+            borderRadius: "999px",
+            fontSize: "11px",
+            fontWeight: 700,
+            color: execution.verified
+              ? "#4de3a5"
+              : "#ff7b7b",
+            background: execution.verified
+              ? "rgba(77, 227, 165, 0.12)"
+              : "rgba(255, 123, 123, 0.12)",
+          }}
+        >
+          {execution.verified
+            ? "VERIFIED ✓"
+            : "FAILED"}
+        </span>
+
+        {execution.repaired && (
+          <span
+            style={{
+              padding: "2px 7px",
+              borderRadius: "999px",
+              fontSize: "11px",
+              fontWeight: 700,
+              color: "#55a7ff",
+              background:
+                "rgba(85, 167, 255, 0.12)",
+            }}
+          >
+            AUTO REPAIR ✓
+          </span>
+        )}
+      </div>
+
+      {execution.artifact && (
+        <div style={{ marginBottom: "5px" }}>
+          <strong>Artifact:</strong>{" "}
+          <code>{execution.artifact}</code>
+        </div>
+      )}
+
+      {execution.exitCode !== null && (
+        <div style={{ marginBottom: "5px" }}>
+          <strong>Exit code:</strong>{" "}
+          {execution.exitCode}
+        </div>
+      )}
+
+      {execution.stdout && (
+        <div style={{ marginBottom: "5px" }}>
+          <strong>Output:</strong>{" "}
+          <code>{execution.stdout}</code>
+        </div>
+      )}
+
+      {execution.repaired && (
+        <div
+          style={{
+            marginTop: "8px",
+            padding: "8px",
+            borderRadius: "4px",
+            background:
+              "rgba(85, 167, 255, 0.07)",
+          }}
+        >
+          <strong>Builder Repair:</strong>{" "}
+          {execution.repairSummary ||
+            "Artifact repaired and retested successfully."}
+        </div>
+      )}
+
+      <details style={{ marginTop: "10px" }}>
+        <summary
+          style={{
+            cursor: "pointer",
+            opacity: 0.8,
+          }}
+        >
+          Execution Evidence
+        </summary>
+
+        <pre
+          style={{
+            marginTop: "8px",
+            padding: "10px",
+            overflowX: "auto",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            fontSize: "11px",
+            lineHeight: 1.45,
+            background: "rgba(0, 0, 0, 0.20)",
+            borderRadius: "4px",
+          }}
+        >
+          {execution.raw}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
+
 export default function MissionQueue() {
   const [missions, setMissions] = useState([]);
+  const [missionSearch, setMissionSearch] = useState("");
   const [runningMissionId, setRunningMissionId] = useState(null);
   const [executingMissionId, setExecutingMissionId] =
     useState(null);
@@ -862,8 +1045,110 @@ export default function MissionQueue() {
   }
 
 
+  const normalizedMissionSearch =
+    missionSearch.trim().toLowerCase();
+
+  const filteredMissions = normalizedMissionSearch
+    ? missions.filter((mission) => {
+        const searchable = [
+          mission.id,
+          mission.name,
+          mission.status,
+          mission.agent,
+          mission.priority,
+        ]
+          .filter((value) => value !== null && value !== undefined)
+          .join(" ")
+          .toLowerCase();
+
+        return searchable.includes(
+          normalizedMissionSearch,
+        );
+      })
+    : missions;
+
+
   return (
     <div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "10px",
+          marginBottom: "14px",
+          padding: "10px 12px",
+          background: "rgba(15, 27, 44, 0.88)",
+          border: "1px solid rgba(85, 167, 255, 0.22)",
+          borderRadius: "7px",
+        }}
+      >
+        <div
+          style={{
+            minWidth: "120px",
+          }}
+        >
+          <div
+            style={{
+              color: "#8fa2b7",
+              fontSize: "10px",
+              letterSpacing: "0.8px",
+              textTransform: "uppercase",
+            }}
+          >
+            Mission Filter
+          </div>
+
+          <strong
+            style={{
+              display: "block",
+              marginTop: "2px",
+              color: "#e8f1fb",
+              fontSize: "12px",
+            }}
+          >
+            {filteredMissions.length} of {missions.length}
+          </strong>
+        </div>
+
+        <input
+          type="search"
+          value={missionSearch}
+          onChange={(event) =>
+            setMissionSearch(event.target.value)
+          }
+          placeholder="Search ID, title, status, agent..."
+          aria-label="Search missions"
+          style={{
+            flex: "1 1 260px",
+            minWidth: "180px",
+            padding: "9px 11px",
+            color: "#eaf4ff",
+            background: "#0a1524",
+            border: "1px solid #38516f",
+            borderRadius: "5px",
+            outline: "none",
+          }}
+        />
+
+        {missionSearch && (
+          <button
+            type="button"
+            onClick={() => setMissionSearch("")}
+            style={{
+              padding: "8px 12px",
+              color: "#dce8f4",
+              background: "#253246",
+              border: "1px solid #435773",
+              borderRadius: "5px",
+              cursor: "pointer",
+            }}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
       {missions.length === 0 && (
         <div
           style={{
@@ -875,7 +1160,24 @@ export default function MissionQueue() {
         </div>
       )}
 
-      {missions.map((mission) => {
+      {missions.length > 0 &&
+        filteredMissions.length === 0 && (
+          <div
+            style={{
+              padding: "16px",
+              marginBottom: "12px",
+              color: "#aab8c8",
+              background: "rgba(20, 31, 48, 0.72)",
+              border:
+                "1px solid rgba(170, 184, 200, 0.20)",
+              borderRadius: "6px",
+            }}
+          >
+            No missions match "{missionSearch}".
+          </div>
+        )}
+
+      {filteredMissions.map((mission) => {
         const policy = missionPolicy(mission.status);
         const missionTone = missionToneStyle(policy.tone);
 
@@ -1927,20 +2229,31 @@ export default function MissionQueue() {
                     </div>
 
                     {task.result && (
-                      <div
-                        style={{
-                          marginTop: "9px",
-                          padding: "9px",
-                          color: "#dce8f4",
-                          background: "rgba(4, 10, 20, 0.7)",
-                          borderRadius: "4px",
-                          whiteSpace: "pre-wrap",
-                          lineHeight: 1.5,
-                          fontSize: "12px",
-                        }}
-                      >
-                        {task.result}
-                      </div>
+                      <>
+                        {parseWorkspaceExecutionResult(
+                          task.result,
+                        ) ? (
+                          <WorkspaceExecutionEvidence
+                            result={task.result}
+                          />
+                        ) : (
+                          <div
+                            style={{
+                              marginTop: "9px",
+                              padding: "9px",
+                              color: "#dce8f4",
+                              background:
+                                "rgba(4, 10, 20, 0.7)",
+                              borderRadius: "4px",
+                              whiteSpace: "pre-wrap",
+                              lineHeight: 1.5,
+                              fontSize: "12px",
+                            }}
+                          >
+                            {task.result}
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 ))}
