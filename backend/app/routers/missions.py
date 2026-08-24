@@ -12,6 +12,14 @@ from services.planner import create_plan, get_plan
 from app.services.researcher import get_research_report, research
 from app.services.reporter import create_deliverable, get_deliverable
 from services.autonomous_worker import get_worker_status, pause_worker, start_worker
+from services.workspace_manager import (
+    WorkspaceConflictError,
+    WorkspaceNotFoundError,
+    WorkspacePathError,
+    get_workspace,
+    list_workspace_files,
+    read_workspace_file,
+)
 
 
 router = APIRouter(
@@ -470,4 +478,140 @@ def pause_mission_worker(mission_id: int):
             "Pause requested. The active task will finish before stopping."
         ),
         "worker": worker,
+    }
+
+
+def _mission_workspace_name(mission_id: int) -> str:
+    if mission_id < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Mission ID must be positive.",
+        )
+
+    return f"mission-{mission_id}"
+
+
+def _require_mission(mission_id: int) -> None:
+    conn = get_connection()
+
+    try:
+        row = conn.execute(
+            """
+            SELECT id
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Mission {mission_id} was not found.",
+        )
+
+
+def _workspace_http_error(error: Exception) -> HTTPException:
+    if isinstance(error, WorkspaceNotFoundError):
+        return HTTPException(
+            status_code=404,
+            detail=str(error),
+        )
+
+    if isinstance(error, WorkspacePathError):
+        return HTTPException(
+            status_code=400,
+            detail=str(error),
+        )
+
+    if isinstance(error, WorkspaceConflictError):
+        return HTTPException(
+            status_code=409,
+            detail=str(error),
+        )
+
+    return HTTPException(
+        status_code=500,
+        detail="Builder workspace operation failed.",
+    )
+
+
+@router.get("/{mission_id}/workspace")
+def get_mission_workspace(mission_id: int):
+    _require_mission(mission_id)
+
+    workspace_name = _mission_workspace_name(
+        mission_id
+    )
+
+    try:
+        workspace = get_workspace(
+            workspace_name
+        )
+    except (
+        WorkspaceNotFoundError,
+        WorkspacePathError,
+        WorkspaceConflictError,
+    ) as error:
+        raise _workspace_http_error(error) from error
+
+    return {
+        "mission_id": mission_id,
+        "workspace": workspace,
+    }
+
+
+@router.get("/{mission_id}/workspace/files")
+def get_mission_workspace_files(mission_id: int):
+    _require_mission(mission_id)
+
+    workspace_name = _mission_workspace_name(
+        mission_id
+    )
+
+    try:
+        listing = list_workspace_files(
+            workspace_name
+        )
+    except (
+        WorkspaceNotFoundError,
+        WorkspacePathError,
+        WorkspaceConflictError,
+    ) as error:
+        raise _workspace_http_error(error) from error
+
+    return {
+        "mission_id": mission_id,
+        **listing,
+    }
+
+
+@router.get("/{mission_id}/workspace/file")
+def get_mission_workspace_file(
+    mission_id: int,
+    path: str,
+):
+    _require_mission(mission_id)
+
+    workspace_name = _mission_workspace_name(
+        mission_id
+    )
+
+    try:
+        artifact = read_workspace_file(
+            workspace_name,
+            path,
+        )
+    except (
+        WorkspaceNotFoundError,
+        WorkspacePathError,
+        WorkspaceConflictError,
+    ) as error:
+        raise _workspace_http_error(error) from error
+
+    return {
+        "mission_id": mission_id,
+        "file": artifact,
     }
