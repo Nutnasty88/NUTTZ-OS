@@ -742,6 +742,135 @@ export default function BuilderWorkspace({
             </code>
           </div>
 
+          {Array.isArray(projectManifest.files) && (
+            <div
+              style={{
+                marginTop: "9px",
+                padding: "9px",
+                background: "#050c16",
+                border: "1px solid #263b54",
+                borderRadius: "5px",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: "8px",
+                  flexWrap: "wrap",
+                  marginBottom: "7px",
+                }}
+              >
+                <div
+                  style={{
+                    color: "#71869e",
+                    fontSize: "9px",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.6px",
+                  }}
+                >
+                  Verified Files
+                </div>
+
+                <span
+                  style={{
+                    padding: "3px 7px",
+                    color: "#4de3a5",
+                    background:
+                      "rgba(77, 227, 165, 0.10)",
+                    border:
+                      "1px solid rgba(77, 227, 165, 0.28)",
+                    borderRadius: "999px",
+                    fontSize: "9px",
+                    fontWeight: 700,
+                  }}
+                >
+                  {projectManifest.files.length} verified
+                </span>
+              </div>
+
+              {projectManifest.files.length === 0 ? (
+                <div
+                  style={{
+                    color: "#8fa2b7",
+                    fontSize: "10px",
+                  }}
+                >
+                  No verified project files.
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: "grid",
+                    gap: "5px",
+                  }}
+                >
+                  {projectManifest.files.map(
+                    (verifiedFile) => (
+                      <div
+                        key={verifiedFile.path}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns:
+                            "minmax(120px, 1fr) auto minmax(150px, auto)",
+                          alignItems: "center",
+                          gap: "10px",
+                          padding: "6px 7px",
+                          background: "#0a1524",
+                          border:
+                            "1px solid #1e3148",
+                          borderRadius: "4px",
+                          minWidth: 0,
+                        }}
+                      >
+                        <code
+                          title={verifiedFile.path}
+                          style={{
+                            color: "#dce8f4",
+                            fontSize: "10px",
+                            overflow: "hidden",
+                            textOverflow:
+                              "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {verifiedFile.path}
+                        </code>
+
+                        <span
+                          style={{
+                            color: "#8fa2b7",
+                            fontSize: "9px",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {formatBytes(
+                            verifiedFile.size_bytes,
+                          )}
+                        </span>
+
+                        <code
+                          title={verifiedFile.sha256}
+                          style={{
+                            color: "#71869e",
+                            fontSize: "9px",
+                            textAlign: "right",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {shortHash(
+                            verifiedFile.sha256,
+                          )}
+                        </code>
+                      </div>
+                    ),
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {projectManifest.artifact?.sha256 && (
             <div
               title={
