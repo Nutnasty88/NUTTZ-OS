@@ -215,6 +215,200 @@ function parseWorkspaceExecutionResult(result) {
 }
 
 
+function parseBuilderAutoExecutionResult(result) {
+  if (
+    typeof result !== "string" ||
+    !result.includes("AUTO PROJECT EXECUTION:")
+  ) {
+    return null;
+  }
+
+  const verified = result.includes(
+    "AUTO PROJECT EXECUTION: VERIFIED",
+  );
+
+  const deferred = result.includes(
+    "AUTO PROJECT EXECUTION: DEFERRED",
+  );
+
+  const failed =
+    !verified &&
+    !deferred &&
+    result.includes("AUTO PROJECT EXECUTION:");
+
+  const entrypointMatch = result.match(
+    /^Entrypoint:\s*(.*)$/m,
+  );
+
+  const exitCodeMatch = result.match(
+    /^Exit code:\s*(-?\d+)$/m,
+  );
+
+  const stdoutMatch = result.match(
+    /^Stdout:\s*(.*)$/m,
+  );
+
+  const reasonMatch = result.match(
+    /^Reason:\s*(.*)$/m,
+  );
+
+  return {
+    verified,
+    deferred,
+    failed,
+    entrypoint: entrypointMatch
+      ? entrypointMatch[1].trim()
+      : "",
+    exitCode: exitCodeMatch
+      ? Number(exitCodeMatch[1])
+      : null,
+    stdout: stdoutMatch
+      ? stdoutMatch[1].trim()
+      : "",
+    reason: reasonMatch
+      ? reasonMatch[1].trim()
+      : "",
+    raw: result,
+  };
+}
+
+
+function BuilderAutoExecutionEvidence({ result }) {
+  const execution = parseBuilderAutoExecutionResult(
+    result,
+  );
+
+  if (!execution) {
+    return null;
+  }
+
+  const statusColor = execution.verified
+    ? "#4de3a5"
+    : execution.deferred
+      ? "#ffd166"
+      : "#ff7b7b";
+
+  const background = execution.verified
+    ? "rgba(77, 227, 165, 0.08)"
+    : execution.deferred
+      ? "rgba(255, 209, 102, 0.08)"
+      : "rgba(255, 123, 123, 0.08)";
+
+  const border = execution.verified
+    ? "1px solid rgba(77, 227, 165, 0.30)"
+    : execution.deferred
+      ? "1px solid rgba(255, 209, 102, 0.30)"
+      : "1px solid rgba(255, 123, 123, 0.30)";
+
+  const statusLabel = execution.verified
+    ? "AUTO VERIFIED ✓"
+    : execution.deferred
+      ? "AUTO RUN DEFERRED"
+      : "AUTO RUN FAILED";
+
+  return (
+    <div
+      style={{
+        marginTop: "10px",
+        padding: "12px",
+        borderRadius: "6px",
+        background,
+        border,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          flexWrap: "wrap",
+          marginBottom: "9px",
+        }}
+      >
+        <strong>Builder Agent</strong>
+
+        <span
+          style={{
+            padding: "2px 7px",
+            borderRadius: "999px",
+            fontSize: "11px",
+            fontWeight: 700,
+            color: statusColor,
+            background: `${statusColor}18`,
+          }}
+        >
+          {statusLabel}
+        </span>
+      </div>
+
+      {execution.entrypoint && (
+        <div style={{ marginBottom: "5px" }}>
+          <strong>Entrypoint:</strong>{" "}
+          <code>{execution.entrypoint}</code>
+        </div>
+      )}
+
+      {execution.exitCode !== null && (
+        <div style={{ marginBottom: "5px" }}>
+          <strong>Exit code:</strong>{" "}
+          {execution.exitCode}
+        </div>
+      )}
+
+      {execution.stdout && (
+        <div style={{ marginBottom: "5px" }}>
+          <strong>Output:</strong>{" "}
+          <code>{execution.stdout}</code>
+        </div>
+      )}
+
+      {execution.reason && (
+        <div
+          style={{
+            marginTop: "8px",
+            padding: "8px",
+            borderRadius: "4px",
+            color: "#ffd166",
+            background:
+              "rgba(255, 209, 102, 0.07)",
+          }}
+        >
+          <strong>Deferred:</strong>{" "}
+          {execution.reason}
+        </div>
+      )}
+
+      <details style={{ marginTop: "10px" }}>
+        <summary
+          style={{
+            cursor: "pointer",
+            opacity: 0.8,
+          }}
+        >
+          Builder Auto-Run Evidence
+        </summary>
+
+        <pre
+          style={{
+            marginTop: "8px",
+            padding: "10px",
+            overflowX: "auto",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            fontSize: "11px",
+            lineHeight: 1.45,
+            background: "rgba(0, 0, 0, 0.20)",
+            borderRadius: "4px",
+          }}
+        >
+          {execution.raw}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
+
 function WorkspaceExecutionEvidence({ result }) {
   const execution = parseWorkspaceExecutionResult(result);
 
@@ -2281,9 +2475,15 @@ export default function MissionQueue() {
 
                     {task.result && (
                       <>
-                        {parseWorkspaceExecutionResult(
+                        {parseBuilderAutoExecutionResult(
                           task.result,
                         ) ? (
+                          <BuilderAutoExecutionEvidence
+                            result={task.result}
+                          />
+                        ) : parseWorkspaceExecutionResult(
+                            task.result,
+                          ) ? (
                           <WorkspaceExecutionEvidence
                             result={task.result}
                           />
