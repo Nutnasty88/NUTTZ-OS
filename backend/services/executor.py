@@ -435,6 +435,153 @@ def _select_python_artifact(
     return python_files[0]
 
 
+def _repair_confidence(
+    repair_result: dict[str, Any] | None,
+    final_execution: dict[str, Any],
+) -> dict[str, Any] | None:
+    """
+    Score confidence in a Builder repair using only verified repair and
+    execution evidence.
+
+    This score is deterministic. The Builder model does not choose it.
+    """
+    if not repair_result:
+        return None
+
+    repair_evidence = repair_result.get("evidence", {})
+
+    if not isinstance(repair_evidence, dict):
+        repair_evidence = {}
+
+    files = repair_evidence.get("files", [])
+
+    if not isinstance(files, list):
+        files = []
+
+    changed_paths = [
+        item.get("path")
+        for item in files
+        if (
+            isinstance(item, dict)
+            and item.get("changed") is True
+            and isinstance(item.get("path"), str)
+        )
+    ]
+
+    traceback_targets = repair_evidence.get(
+        "traceback_targets",
+        [],
+    )
+
+    if not isinstance(traceback_targets, list):
+        traceback_targets = []
+
+    traceback_targets = [
+        item
+        for item in traceback_targets
+        if isinstance(item, str)
+    ]
+
+    primary_target = repair_evidence.get(
+        "traceback_primary_target"
+    )
+
+    final_verified = (
+        final_execution.get("verified") is True
+        and final_execution.get("exit_code") == 0
+    )
+
+    score = 60 if final_verified else 0
+    reasons = []
+    deductions = []
+
+    if final_verified:
+        reasons.append(
+            "Repaired project passed independent execution verification."
+        )
+    else:
+        deductions.append(
+            "Repaired project did not pass final execution verification."
+        )
+
+    if (
+        isinstance(primary_target, str)
+        and primary_target
+        and primary_target in changed_paths
+    ):
+        score += 20
+        reasons.append(
+            "Primary traceback target was repaired."
+        )
+    elif primary_target:
+        deductions.append(
+            "Primary traceback target was not modified."
+        )
+
+    if traceback_targets and changed_paths:
+        non_traceback_paths = [
+            item
+            for item in changed_paths
+            if item not in traceback_targets
+        ]
+
+        if not non_traceback_paths:
+            score += 10
+            reasons.append(
+                "All repaired files were traceback-linked."
+            )
+        else:
+            penalty = min(
+                20,
+                10 * len(non_traceback_paths),
+            )
+            score -= penalty
+            deductions.append(
+                "Repair modified non-traceback file(s): "
+                + ", ".join(non_traceback_paths)
+            )
+
+    elif not traceback_targets:
+        score -= 10
+        deductions.append(
+            "No workspace-local traceback target was available."
+        )
+
+    if len(changed_paths) == 1:
+        score += 10
+        reasons.append(
+            "Repair was limited to one project file."
+        )
+    elif len(changed_paths) > 1:
+        reasons.append(
+            f"Repair changed {len(changed_paths)} project files."
+        )
+
+    score = max(0, min(100, score))
+
+    if score >= 85:
+        level = "High"
+    elif score >= 65:
+        level = "Medium"
+    else:
+        level = "Low"
+
+    return {
+        "score": score,
+        "level": level,
+        "verified": final_verified,
+        "primary_target": primary_target,
+        "primary_target_repaired": (
+            isinstance(primary_target, str)
+            and primary_target in changed_paths
+        ),
+        "traceback_targets": traceback_targets,
+        "changed_files": changed_paths,
+        "reasons": reasons,
+        "deductions": deductions,
+    }
+
+
 def _complete_workspace_execution_task(
     mission: Any,
     task: Any,
@@ -553,6 +700,11 @@ def _complete_workspace_execution_task(
             ),
         )
 
+        repair_confidence = _repair_confidence(
+            repair_result,
+            evidence,
+        )
+
         result = (
             "WORKSPACE EXECUTION: VERIFIED\n\n"
             f"Artifact: {artifact_path}\n"
@@ -573,6 +725,12 @@ def _complete_workspace_execution_task(
                 + "\n\nREPAIR EVIDENCE:\n"
                 + json.dumps(
                     repair_result.get("evidence", {}),
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n\nREPAIR CONFIDENCE:\n"
+                + json.dumps(
+                    repair_confidence,
                     indent=2,
                     sort_keys=True,
                 )
@@ -1043,6 +1201,11 @@ def _complete_builder_task(
                     ),
                 )
 
+        auto_repair_confidence = _repair_confidence(
+            auto_repair,
+            auto_execution or {},
+        )
+
         result = (
             "BUILDER AGENT: COMPLETED\n\n"
             f"{builder_result.get('summary', 'Builder task completed.')}\n\n"
@@ -1081,6 +1244,12 @@ def _complete_builder_task(
                     + "\n\nAUTO REPAIR EVIDENCE:\n"
                     + json.dumps(
                         auto_repair.get("evidence", {}),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n\nAUTO REPAIR CONFIDENCE:\n"
+                    + json.dumps(
+                        auto_repair_confidence,
                         indent=2,
                         sort_keys=True,
                     )
