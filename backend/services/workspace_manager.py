@@ -564,8 +564,57 @@ def write_project_manifest(
             "the current workspace artifact."
         )
 
+    workspace_listing = list_workspace_files(
+        normalized,
+    )
+
+    if workspace_listing["truncated"]:
+        raise WorkspaceConflictError(
+            "Project manifest cannot verify a truncated "
+            "workspace file listing."
+        )
+
+    project_files = []
+
+    for file_record in workspace_listing["files"]:
+        relative_path = file_record["path"]
+
+        if relative_path == PROJECT_MANIFEST_PATH:
+            continue
+
+        current_file = read_workspace_file(
+            normalized,
+            relative_path,
+        )
+
+        project_files.append(
+            {
+                "path": current_file["path"],
+                "sha256": current_file["sha256"],
+                "size_bytes": current_file["size_bytes"],
+            }
+        )
+
+    project_files.sort(
+        key=lambda item: item["path"].lower()
+    )
+
+    if not project_files:
+        raise WorkspaceConflictError(
+            "Project manifest requires at least one project file."
+        )
+
+    if not any(
+        item["path"] == artifact["path"]
+        for item in project_files
+    ):
+        raise WorkspaceConflictError(
+            "Project manifest file set does not contain "
+            "the verified entrypoint."
+        )
+
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "name": normalized,
         "mission_id": mission_id,
         "runtime": runtime,
@@ -575,6 +624,7 @@ def write_project_manifest(
             "sha256": artifact["sha256"],
             "size_bytes": artifact["size_bytes"],
         },
+        "files": project_files,
         "run_command": run_command,
         "verification": {
             "verified": True,

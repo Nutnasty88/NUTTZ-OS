@@ -377,7 +377,7 @@ def launch_verified_project(
             "Project manifest must contain an object."
         )
 
-    if manifest.get("schema_version") != 1:
+    if manifest.get("schema_version") != 2:
         raise WorkspaceExecutionError(
             "Unsupported project manifest schema."
         )
@@ -414,6 +414,157 @@ def launch_verified_project(
     if not isinstance(entrypoint, str):
         raise WorkspaceExecutionError(
             "Project manifest entrypoint is invalid."
+        )
+
+    project_files = manifest.get("files")
+
+    if (
+        not isinstance(project_files, list)
+        or not project_files
+    ):
+        raise WorkspaceExecutionError(
+            "Project manifest file set is invalid."
+        )
+
+    expected_files = {}
+
+    for file_record in project_files:
+        if not isinstance(file_record, dict):
+            raise WorkspaceExecutionError(
+                "Project manifest contains an invalid "
+                "file record."
+            )
+
+        file_path = file_record.get("path")
+        file_sha256 = file_record.get("sha256")
+        file_size = file_record.get("size_bytes")
+
+        if (
+            not isinstance(file_path, str)
+            or not file_path
+            or file_path == PROJECT_MANIFEST_PATH
+        ):
+            raise WorkspaceExecutionError(
+                "Project manifest contains an invalid "
+                "file path."
+            )
+
+        if file_path in expected_files:
+            raise WorkspaceExecutionError(
+                "Project manifest contains duplicate "
+                "file paths."
+            )
+
+        if (
+            not isinstance(file_sha256, str)
+            or len(file_sha256) != 64
+        ):
+            raise WorkspaceExecutionError(
+                "Project manifest contains an invalid "
+                "file SHA256."
+            )
+
+        if (
+            not isinstance(file_size, int)
+            or file_size < 0
+        ):
+            raise WorkspaceExecutionError(
+                "Project manifest contains an invalid "
+                "file size."
+            )
+
+        expected_files[file_path] = {
+            "sha256": file_sha256,
+            "size_bytes": file_size,
+        }
+
+    from services.workspace_manager import (
+        list_workspace_files,
+    )
+
+    current_listing = list_workspace_files(
+        workspace_name,
+    )
+
+    if current_listing["truncated"]:
+        raise WorkspaceExecutionError(
+            "Project launch denied: workspace file listing "
+            "is truncated."
+        )
+
+    current_paths = {
+        item["path"]
+        for item in current_listing["files"]
+        if item["path"] != PROJECT_MANIFEST_PATH
+    }
+
+    expected_paths = set(expected_files)
+
+    if current_paths != expected_paths:
+        added = sorted(
+            current_paths - expected_paths
+        )
+        missing = sorted(
+            expected_paths - current_paths
+        )
+
+        details = []
+
+        if added:
+            details.append(
+                "unexpected files: " + ", ".join(added)
+            )
+
+        if missing:
+            details.append(
+                "missing files: " + ", ".join(missing)
+            )
+
+        raise WorkspaceExecutionError(
+            "Project launch denied: workspace file set "
+            "no longer matches the verified manifest"
+            + (
+                " (" + "; ".join(details) + ")"
+                if details
+                else ""
+            )
+            + "."
+        )
+
+    verified_files = []
+
+    for file_path in sorted(expected_files):
+        expected = expected_files[file_path]
+
+        current_file = read_workspace_file(
+            workspace_name,
+            file_path,
+        )
+
+        if (
+            current_file["sha256"]
+            != expected["sha256"]
+        ):
+            raise WorkspaceExecutionError(
+                "Project launch denied: file SHA256 "
+                f"changed for {file_path}."
+            )
+
+        if (
+            current_file["size_bytes"]
+            != expected["size_bytes"]
+        ):
+            raise WorkspaceExecutionError(
+                "Project launch denied: file size "
+                f"changed for {file_path}."
+            )
+
+        verified_files.append(
+            {
+                "path": file_path,
+                "sha256": current_file["sha256"],
+                "size_bytes": current_file["size_bytes"],
+            }
         )
 
     artifact_record = manifest.get("artifact")
@@ -499,6 +650,8 @@ def launch_verified_project(
         },
         "entrypoint": entrypoint,
         "artifact_sha256": artifact["sha256"],
+        "verified_files": verified_files,
+        "verified_file_count": len(verified_files),
         "execution": execution,
         "success": execution.get("verified") is True,
     }
