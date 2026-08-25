@@ -273,7 +273,10 @@ WORKSPACE_EXECUTION_PATTERN = re.compile(
         python|
         \.py|
         script|
-        program
+        program|
+        project|
+        application|
+        app
     )\b
     """,
     flags=re.IGNORECASE | re.DOTALL | re.VERBOSE,
@@ -768,6 +771,63 @@ def _is_builder_task(task: Any) -> bool:
     return bool(BUILDER_TASK_PATTERN.search(task_text))
 
 
+def _future_project_task_state(
+    mission_id: int,
+    current_position: int,
+) -> dict[str, bool]:
+    """
+    Inspect unfinished later tasks before automatically executing a
+    Builder project.
+
+    Auto-run is deferred when a later Builder task may still modify the
+    project or when Planner already supplied an explicit execution task.
+    """
+    conn = get_connection()
+
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                position,
+                title,
+                instructions,
+                status
+            FROM mission_tasks
+            WHERE
+                mission_id=?
+                AND position>?
+                AND status IN (
+                    'Pending',
+                    'Running',
+                    'Blocked'
+                )
+            ORDER BY position ASC
+            """,
+            (
+                mission_id,
+                current_position,
+            ),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    later_builder = False
+    later_execution = False
+
+    for row in rows:
+        if _is_workspace_execution_task(row):
+            later_execution = True
+
+        if _is_builder_task(row):
+            later_builder = True
+
+    return {
+        "later_builder": later_builder,
+        "later_execution": later_execution,
+    }
+
+
 def _complete_builder_task(
     mission: Any,
     task: Any,
@@ -814,6 +874,123 @@ def _complete_builder_task(
                 "Builder Agent completed without creating artifacts."
             )
 
+        entrypoint = builder_result.get("entrypoint")
+
+        auto_execution = None
+        manifest_result = None
+        auto_run_skipped_reason = ""
+
+        if entrypoint:
+            future_state = _future_project_task_state(
+                mission_id,
+                int(task["position"]),
+            )
+
+            if future_state["later_execution"]:
+                auto_run_skipped_reason = (
+                    "A later explicit Workspace Executor task "
+                    "will verify the project."
+                )
+
+                log_event(
+                    mission_id,
+                    "Builder",
+                    "auto_run_deferred",
+                    (
+                        f"Builder project entrypoint {entrypoint} "
+                        "was not auto-run because a later explicit "
+                        "execution task exists"
+                    ),
+                )
+
+            elif future_state["later_builder"]:
+                auto_run_skipped_reason = (
+                    "A later Builder task may still modify "
+                    "the project."
+                )
+
+                log_event(
+                    mission_id,
+                    "Builder",
+                    "auto_run_deferred",
+                    (
+                        f"Builder project entrypoint {entrypoint} "
+                        "was not auto-run because later Builder "
+                        "work remains"
+                    ),
+                )
+
+            else:
+                log_event(
+                    mission_id,
+                    "Builder",
+                    "auto_verifying",
+                    (
+                        f"Builder completed the final runnable project "
+                        f"stage; automatically verifying {entrypoint}"
+                    ),
+                )
+
+                auto_execution = execute_python_artifact(
+                    mission_id,
+                    entrypoint,
+                )
+
+                if (
+                    not auto_execution.get("verified")
+                    or auto_execution.get("exit_code") != 0
+                ):
+                    raise RuntimeError(
+                        "Automatic Builder project verification failed."
+                        "\n\n"
+                        + json.dumps(
+                            auto_execution,
+                            indent=2,
+                            sort_keys=True,
+                        )
+                    )
+
+                manifest_result = write_project_manifest(
+                    workspace_name=auto_execution["workspace"],
+                    mission_id=mission_id,
+                    entrypoint=auto_execution["artifact"],
+                    runtime="python",
+                    run_command=[
+                        "python3",
+                        "-I",
+                        "-B",
+                        auto_execution["artifact"],
+                    ],
+                    artifact_sha256=auto_execution[
+                        "artifact_sha256"
+                    ],
+                    artifact_size_bytes=auto_execution[
+                        "artifact_size_bytes"
+                    ],
+                    verified=True,
+                )
+
+                log_event(
+                    mission_id,
+                    "Workspace Executor",
+                    "auto_verified",
+                    (
+                        f"Automatically verified Builder project "
+                        f"{entrypoint}: exit code "
+                        f"{auto_execution['exit_code']}"
+                    ),
+                )
+
+                log_event(
+                    mission_id,
+                    "Workspace Executor",
+                    "manifest",
+                    (
+                        "Verified project manifest automatically "
+                        f"written for {entrypoint}"
+                    ),
+                )
+
         result = (
             "BUILDER AGENT: COMPLETED\n\n"
             f"{builder_result.get('summary', 'Builder task completed.')}\n\n"
@@ -829,6 +1006,34 @@ def _complete_builder_task(
                 sort_keys=True,
             )
         )
+
+        if auto_execution:
+            result += (
+                "\n\nAUTO PROJECT EXECUTION: VERIFIED\n\n"
+                f"Entrypoint: {entrypoint}\n"
+                f"Exit code: {auto_execution.get('exit_code')}\n"
+                f"Stdout: "
+                f"{auto_execution.get('stdout', '').strip()}\n"
+                "\nVERIFIED AUTO EXECUTION EVIDENCE:\n"
+                + json.dumps(
+                    auto_execution,
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n\nVERIFIED PROJECT MANIFEST:\n"
+                + json.dumps(
+                    manifest_result,
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+
+        elif entrypoint and auto_run_skipped_reason:
+            result += (
+                "\n\nAUTO PROJECT EXECUTION: DEFERRED\n\n"
+                f"Entrypoint: {entrypoint}\n"
+                f"Reason: {auto_run_skipped_reason}"
+            )
 
     except Exception as error:
         conn = get_connection()
@@ -958,6 +1163,17 @@ def _complete_builder_task(
         "tool_results": [],
         "builder": builder_result,
         "evidence": evidence,
+        "auto_execution": auto_execution,
+        "manifest": manifest_result,
+        "auto_run": {
+            "entrypoint": entrypoint,
+            "attempted": auto_execution is not None,
+            "verified": (
+                bool(auto_execution)
+                and auto_execution.get("verified") is True
+            ),
+            "skipped_reason": auto_run_skipped_reason,
+        },
         "model": builder_result.get("model"),
         "agent": "Builder",
     }
