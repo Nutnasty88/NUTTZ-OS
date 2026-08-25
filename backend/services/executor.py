@@ -936,15 +936,67 @@ def _complete_builder_task(
                     entrypoint,
                 )
 
+                auto_repair = None
+                initial_auto_execution = None
+
+                if (
+                    not auto_execution.get("verified")
+                    or auto_execution.get("exit_code") != 0
+                ):
+                    initial_auto_execution = auto_execution
+
+                    log_event(
+                        mission_id,
+                        "Workspace Executor",
+                        "auto_repairing",
+                        (
+                            "Automatic Builder project verification "
+                            f"failed for {entrypoint}; Builder is "
+                            "attempting one automatic repair"
+                        ),
+                    )
+
+                    auto_repair = repair_artifact(
+                        mission_id=mission_id,
+                        mission_title=mission["title"],
+                        task_id=task["id"],
+                        task_position=task["position"],
+                        task_title=task["title"],
+                        task_instructions=task["instructions"],
+                        artifact_path=entrypoint,
+                        execution_evidence=auto_execution,
+                    )
+
+                    log_event(
+                        mission_id,
+                        "Workspace Executor",
+                        "auto_retesting",
+                        (
+                            f"Builder repaired automatic project "
+                            f"entrypoint {entrypoint}; executing again"
+                        ),
+                    )
+
+                    auto_execution = execute_python_artifact(
+                        mission_id,
+                        entrypoint,
+                    )
+
                 if (
                     not auto_execution.get("verified")
                     or auto_execution.get("exit_code") != 0
                 ):
                     raise RuntimeError(
-                        "Automatic Builder project verification failed."
+                        "Automatic Builder project verification failed "
+                        "after one automatic repair attempt."
                         "\n\n"
                         + json.dumps(
-                            auto_execution,
+                            {
+                                "initial_execution":
+                                    initial_auto_execution,
+                                "repair": auto_repair,
+                                "final_execution": auto_execution,
+                            },
                             indent=2,
                             sort_keys=True,
                         )
@@ -1014,6 +1066,28 @@ def _complete_builder_task(
                 f"Exit code: {auto_execution.get('exit_code')}\n"
                 f"Stdout: "
                 f"{auto_execution.get('stdout', '').strip()}\n"
+            )
+
+            if auto_repair:
+                result += (
+                    "\nAUTO REPAIR: SUCCESS\n"
+                    f"{auto_repair.get('summary', 'Artifact repaired.')}\n"
+                    "\nINITIAL AUTO EXECUTION EVIDENCE:\n"
+                    + json.dumps(
+                        initial_auto_execution,
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n\nAUTO REPAIR EVIDENCE:\n"
+                    + json.dumps(
+                        auto_repair.get("evidence", {}),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+
+            result += (
                 "\nVERIFIED AUTO EXECUTION EVIDENCE:\n"
                 + json.dumps(
                     auto_execution,
