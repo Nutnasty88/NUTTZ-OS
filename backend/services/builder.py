@@ -515,12 +515,16 @@ def repair_artifact(
     execution_evidence: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    Repair one failed Builder artifact using verified execution evidence.
+    Repair a failed Builder project using verified execution evidence.
 
-    Builder proposes complete replacement contents.
-    Workspace Manager performs and verifies the actual write.
+    Builder may replace up to three existing Python files when the
+    failure crosses module boundaries. NUTTZ-OS validates every target,
+    performs every write through Workspace Manager, and independently
+    executes the original entrypoint afterward.
     """
     workspace_name = _workspace_name(mission_id)
+
+    max_repair_files = 3
 
     if not isinstance(execution_evidence, dict):
         raise RuntimeError(
@@ -537,57 +541,91 @@ def repair_artifact(
         artifact_path,
     )
 
-    current_content = current_artifact["content"]
+    listing = list_workspace_files(workspace_name)
+    listed_files = listing.get("files", [])
+
+    existing_python_paths = {
+        item.get("path")
+        for item in listed_files
+        if (
+            isinstance(item, dict)
+            and isinstance(item.get("path"), str)
+            and item["path"].lower().endswith(".py")
+            and item["path"] != "nuttz-project.json"
+        )
+    }
+
+    if artifact_path not in existing_python_paths:
+        raise RuntimeError(
+            "Builder repair entrypoint is not an existing Python "
+            "workspace file."
+        )
+
+    workspace_context = _workspace_context(
+        workspace_name,
+    )
 
     log_event(
         mission_id,
         "Builder",
         "repairing",
         (
-            f"Builder repairing task {task_position} artifact "
-            f"{artifact_path} from verified execution failure"
+            f"Builder repairing task {task_position} project from "
+            f"verified execution failure in {artifact_path}"
         ),
     )
 
-    system_prompt = """
-You are Builder Agent v1 repair mode inside NUTTZ-OS.
+    system_prompt = f"""
+You are Builder Agent v1 project repair mode inside NUTTZ-OS.
 
-A Python artifact in an isolated Builder workspace was executed by the
+A Python project in an isolated Builder workspace was executed by the
 NUTTZ-OS Workspace Executor and failed verification.
 
-Repair the artifact using the supplied execution evidence.
+Repair the project using the supplied execution evidence and existing
+workspace project context.
+
+The failure may originate in the entrypoint or in another existing
+Python module imported by the entrypoint.
 
 You do NOT have direct filesystem or execution access.
 
-NUTTZ-OS will validate and write the replacement through Workspace
-Manager and independently execute it again afterward.
+NUTTZ-OS will validate every requested file replacement, write it
+through Workspace Manager, and independently execute the ORIGINAL
+entrypoint again afterward.
 
 Return JSON only.
 
 Required format:
 
-{
-  "summary": "short description of the repair",
+{{
+  "summary": "short description of the project repair",
   "files": [
-    {
-      "path": "relative/path/to/file.py",
+    {{
+      "path": "existing/relative/file.py",
       "content": "complete replacement file contents"
-    }
+    }}
   ]
-}
+}}
 
 Rules:
 - Return valid JSON only.
 - Do not use markdown code fences.
 - Do not reveal internal reasoning.
 - Do not include <think> tags.
-- Repair only the supplied artifact.
-- Return exactly one file.
-- The path must exactly match the supplied artifact path.
-- Return complete replacement contents, not a patch.
-- Treat stdout, stderr, exit code and timeout data as factual evidence.
+- Return between 1 and {max_repair_files} files.
+- Repair only existing Python files shown in the workspace context.
+- Do not create new files.
+- Do not return duplicate file paths.
+- Never create, modify, or return nuttz-project.json.
+- Return complete replacement contents, not patches.
+- Change only files needed to correct the verified failure.
+- Treat stdout, stderr, traceback, exit code and timeout data as
+  factual evidence.
+- Use traceback/module information to identify which existing project
+  files require correction.
 - Do not invent execution results.
 - Do not claim the repair succeeded.
+- NUTTZ-OS will rerun the original entrypoint after your repair.
 """.strip()
 
     evidence_json = json.dumps(
@@ -607,21 +645,22 @@ Task title: {task_title}
 Original task instructions:
 {task_instructions}
 
-Artifact requiring repair:
+Original project entrypoint:
 {artifact_path}
 
-Current artifact SHA256:
+Current entrypoint SHA256:
 {current_artifact["sha256"]}
-
-Current artifact contents:
---- BEGIN CURRENT ARTIFACT ---
-{current_content}
---- END CURRENT ARTIFACT ---
 
 Verified Workspace Executor failure evidence:
 {evidence_json}
 
-Repair this artifact so NUTTZ-OS can execute it again.
+Read-only existing project context:
+--- BEGIN PROJECT CONTEXT ---
+{workspace_context}
+--- END PROJECT CONTEXT ---
+
+Repair the existing project files necessary to correct this failure.
+NUTTZ-OS will execute the original entrypoint again afterward.
 """.strip()
 
     try:
@@ -646,47 +685,110 @@ Repair this artifact so NUTTZ-OS can execute it again.
 
         files = repair_plan["files"]
 
-        if len(files) != 1:
+        if not files:
             raise RuntimeError(
-                "Builder repair must return exactly one file."
+                "Builder project repair returned no files."
             )
 
-        file_entry = files[0]
-
-        if file_entry["path"] != artifact_path:
+        if len(files) > max_repair_files:
             raise RuntimeError(
-                "Builder repair attempted to modify a different artifact."
+                "Builder project repair may modify at most "
+                f"{max_repair_files} files."
             )
 
-        write_result = write_workspace_file(
-            workspace_name,
-            artifact_path,
-            file_entry["content"],
-        )
+        requested_paths = [
+            file_entry["path"]
+            for file_entry in files
+        ]
 
-        verification = read_workspace_file(
-            workspace_name,
-            artifact_path,
-        )
-
-        if verification["sha256"] != write_result["sha256"]:
+        if len(set(requested_paths)) != len(requested_paths):
             raise RuntimeError(
-                "Builder repair artifact verification failed."
+                "Builder project repair returned duplicate file paths."
             )
 
-        if verification["sha256"] == current_artifact["sha256"]:
+        for relative_path in requested_paths:
+            if relative_path == "nuttz-project.json":
+                raise RuntimeError(
+                    "Builder repair may not modify the NUTTZ project "
+                    "manifest."
+                )
+
+            if not relative_path.lower().endswith(".py"):
+                raise RuntimeError(
+                    "Builder project repair may only modify Python files."
+                )
+
+            if relative_path not in existing_python_paths:
+                raise RuntimeError(
+                    "Builder project repair attempted to modify a file "
+                    "that did not already exist in the workspace: "
+                    f"{relative_path}"
+                )
+
+        before_files = {}
+
+        for relative_path in requested_paths:
+            before_files[relative_path] = read_workspace_file(
+                workspace_name,
+                relative_path,
+            )
+
+        changed_files = []
+
+        for file_entry in files:
+            relative_path = file_entry["path"]
+            previous = before_files[relative_path]
+
+            write_result = write_workspace_file(
+                workspace_name,
+                relative_path,
+                file_entry["content"],
+            )
+
+            verification = read_workspace_file(
+                workspace_name,
+                relative_path,
+            )
+
+            if verification["sha256"] != write_result["sha256"]:
+                raise RuntimeError(
+                    "Builder project repair verification failed for "
+                    f"{relative_path}."
+                )
+
+            changed = (
+                verification["sha256"]
+                != previous["sha256"]
+            )
+
+            changed_files.append(
+                {
+                    "path": relative_path,
+                    "created": write_result["created"],
+                    "previous_sha256": previous["sha256"],
+                    "repaired_sha256": verification["sha256"],
+                    "size_bytes": verification["size_bytes"],
+                    "changed": changed,
+                    "verified": True,
+                }
+            )
+
+        if not any(
+            item["changed"]
+            for item in changed_files
+        ):
             raise RuntimeError(
-                "Builder repair did not change the failed artifact."
+                "Builder project repair did not change any failed "
+                "project file."
             )
 
         repair_evidence = {
-            "type": "builder_workspace_repair",
+            "type": "builder_workspace_project_repair",
             "verified": True,
             "workspace": workspace_name,
-            "artifact": artifact_path,
-            "previous_sha256": current_artifact["sha256"],
-            "repaired_sha256": verification["sha256"],
-            "size_bytes": verification["size_bytes"],
+            "entrypoint": artifact_path,
+            "file_count": len(changed_files),
+            "files": changed_files,
         }
 
         log_event(
@@ -694,8 +796,8 @@ Repair this artifact so NUTTZ-OS can execute it again.
             "Builder",
             "repaired",
             (
-                f"Builder repaired task {task_position} artifact "
-                f"{artifact_path}"
+                f"Builder repaired task {task_position} project with "
+                f"{len(changed_files)} verified file replacement(s)"
             ),
         )
 
@@ -708,13 +810,31 @@ Repair this artifact so NUTTZ-OS can execute it again.
             "model": BUILDER_MODEL,
             "summary": repair_plan["summary"],
             "workspace": workspace_name,
+            "entrypoint": artifact_path,
             "artifact": {
                 "path": artifact_path,
-                "created": write_result["created"],
-                "size_bytes": verification["size_bytes"],
-                "sha256": verification["sha256"],
+                "created": False,
+                "size_bytes": read_workspace_file(
+                    workspace_name,
+                    artifact_path,
+                )["size_bytes"],
+                "sha256": read_workspace_file(
+                    workspace_name,
+                    artifact_path,
+                )["sha256"],
                 "verified": True,
             },
+            "artifacts": [
+                {
+                    "path": item["path"],
+                    "created": item["created"],
+                    "size_bytes": item["size_bytes"],
+                    "sha256": item["repaired_sha256"],
+                    "changed": item["changed"],
+                    "verified": item["verified"],
+                }
+                for item in changed_files
+            ],
             "evidence": repair_evidence,
         }
 
@@ -724,8 +844,8 @@ Repair this artifact so NUTTZ-OS can execute it again.
             "Builder",
             "repair_error",
             (
-                f"Builder failed repair for task {task_position} "
-                f"artifact {artifact_path}: {error}"
+                f"Builder failed project repair for task "
+                f"{task_position} entrypoint {artifact_path}: {error}"
             ),
         )
 
