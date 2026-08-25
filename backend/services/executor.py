@@ -9,6 +9,7 @@ from services.ollama_service import chat_with_ollama
 from services.tool_runner import run_tool
 from services.workspace_executor import execute_python_artifact
 from services.workspace_manager import list_workspace_files
+from services.workspace_manager import write_project_manifest
 
 
 EXECUTOR_MODEL = "qwen3:8b"
@@ -445,6 +446,34 @@ def _complete_workspace_execution_task(
                 "Workspace artifact returned a non-zero exit code."
             )
 
+        manifest_result = write_project_manifest(
+            workspace_name=evidence["workspace"],
+            mission_id=mission_id,
+            entrypoint=evidence["artifact"],
+            runtime="python",
+            run_command=[
+                "python3",
+                "-I",
+                "-B",
+                evidence["artifact"],
+            ],
+            artifact_sha256=evidence["artifact_sha256"],
+            artifact_size_bytes=evidence[
+                "artifact_size_bytes"
+            ],
+            verified=True,
+        )
+
+        log_event(
+            mission_id,
+            "Workspace Executor",
+            "manifest",
+            (
+                f"Verified project manifest written for "
+                f"{evidence['artifact']}"
+            ),
+        )
+
         result = (
             "WORKSPACE EXECUTION: VERIFIED\n\n"
             f"Artifact: {artifact_path}\n"
@@ -606,6 +635,7 @@ def _complete_workspace_execution_task(
         "progress": progress,
         "tool_results": [],
         "evidence": evidence,
+        "manifest": manifest_result,
         "repair": repair_result,
         "initial_evidence": initial_evidence,
         "agent": "Workspace Executor",

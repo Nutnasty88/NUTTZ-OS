@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import tempfile
@@ -472,4 +473,146 @@ def write_workspace_file(
         "size_bytes": len(content_bytes),
         "sha256": _sha256(content_bytes),
         "modified_at": _utc_timestamp(stat.st_mtime),
+    }
+
+
+PROJECT_MANIFEST_PATH = "nuttz-project.json"
+
+
+def write_project_manifest(
+    workspace_name: str,
+    mission_id: int,
+    entrypoint: str,
+    runtime: str,
+    run_command: list[str],
+    artifact_sha256: str,
+    artifact_size_bytes: int,
+    verified: bool,
+) -> dict[str, Any]:
+    """
+    Write the NUTTZ project manifest from trusted verified runtime data.
+
+    The Builder model does not generate this file. NUTTZ-OS creates it
+    after Workspace Executor verification succeeds.
+    """
+    normalized = _validate_workspace_name(
+        workspace_name,
+    )
+
+    if not isinstance(mission_id, int) or mission_id < 1:
+        raise WorkspaceConflictError(
+            "Project manifest requires a valid mission ID."
+        )
+
+    if not isinstance(entrypoint, str) or not entrypoint.strip():
+        raise WorkspaceConflictError(
+            "Project manifest requires an entrypoint."
+        )
+
+    if not isinstance(runtime, str) or not runtime.strip():
+        raise WorkspaceConflictError(
+            "Project manifest requires a runtime."
+        )
+
+    if (
+        not isinstance(run_command, list)
+        or not run_command
+        or not all(
+            isinstance(item, str) and item
+            for item in run_command
+        )
+    ):
+        raise WorkspaceConflictError(
+            "Project manifest requires a valid run command."
+        )
+
+    if (
+        not isinstance(artifact_sha256, str)
+        or len(artifact_sha256) != 64
+    ):
+        raise WorkspaceConflictError(
+            "Project manifest requires an artifact SHA256."
+        )
+
+    if (
+        not isinstance(artifact_size_bytes, int)
+        or artifact_size_bytes < 0
+    ):
+        raise WorkspaceConflictError(
+            "Project manifest requires a valid artifact size."
+        )
+
+    if verified is not True:
+        raise WorkspaceConflictError(
+            "Project manifest can only record verified execution."
+        )
+
+    artifact = read_workspace_file(
+        normalized,
+        entrypoint,
+    )
+
+    if artifact["sha256"] != artifact_sha256:
+        raise WorkspaceConflictError(
+            "Project manifest artifact SHA256 does not match "
+            "the current workspace artifact."
+        )
+
+    if artifact["size_bytes"] != artifact_size_bytes:
+        raise WorkspaceConflictError(
+            "Project manifest artifact size does not match "
+            "the current workspace artifact."
+        )
+
+    manifest = {
+        "schema_version": 1,
+        "name": normalized,
+        "mission_id": mission_id,
+        "runtime": runtime,
+        "entrypoint": artifact["path"],
+        "artifact": {
+            "path": artifact["path"],
+            "sha256": artifact["sha256"],
+            "size_bytes": artifact["size_bytes"],
+        },
+        "run_command": run_command,
+        "verification": {
+            "verified": True,
+            "source": "Workspace Executor",
+        },
+    }
+
+    content = (
+        json.dumps(
+            manifest,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+    write_result = write_workspace_file(
+        normalized,
+        PROJECT_MANIFEST_PATH,
+        content,
+    )
+
+    verification = read_workspace_file(
+        normalized,
+        PROJECT_MANIFEST_PATH,
+    )
+
+    if verification["sha256"] != write_result["sha256"]:
+        raise WorkspaceConflictError(
+            "Project manifest write verification failed."
+        )
+
+    return {
+        "workspace": normalized,
+        "path": PROJECT_MANIFEST_PATH,
+        "created": write_result["created"],
+        "size_bytes": verification["size_bytes"],
+        "sha256": verification["sha256"],
+        "manifest": manifest,
+        "verified": True,
     }
