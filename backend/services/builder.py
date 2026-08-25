@@ -17,6 +17,8 @@ BUILDER_MODEL = "qwen3:8b"
 
 MAX_BUILDER_FILES = 20
 
+MAX_WORKSPACE_CONTEXT_BYTES = 24000
+
 
 def _workspace_name(mission_id: int) -> str:
     return f"mission-{mission_id}"
@@ -139,6 +141,13 @@ def _parse_builder_response(
 def _workspace_context(
     workspace_name: str,
 ) -> str:
+    """
+    Build bounded read-only project context for Builder.
+
+    Builder can see existing UTF-8 project files so later tasks can
+    extend a multi-file project coherently. NUTTZ-generated manifests
+    are excluded because Builder must never author or modify them.
+    """
     listing = list_workspace_files(workspace_name)
 
     files = listing.get("files", [])
@@ -146,20 +155,86 @@ def _workspace_context(
     if not files:
         return "Workspace currently contains no files."
 
-    lines = [
-        "Existing workspace files:",
+    sections = [
+        "Existing workspace project files:",
     ]
 
-    for item in files[:MAX_BUILDER_FILES]:
-        if isinstance(item, dict):
-            path = item.get("path", "")
-            size = item.get("size_bytes", "")
+    context_bytes = 0
 
-            lines.append(
-                f"- {path} ({size} bytes)"
+    for item in files[:MAX_BUILDER_FILES]:
+        if not isinstance(item, dict):
+            continue
+
+        relative_path = item.get("path", "")
+
+        if not relative_path:
+            continue
+
+        if relative_path == "nuttz-project.json":
+            continue
+
+        try:
+            file_data = read_workspace_file(
+                workspace_name,
+                relative_path,
+            )
+        except Exception:
+            sections.append(
+                f"\nFILE: {relative_path}\n"
+                "[Unable to include file contents]"
+            )
+            continue
+
+        content = file_data.get("content", "")
+
+        if not isinstance(content, str):
+            continue
+
+        encoded = content.encode("utf-8")
+
+        remaining = (
+            MAX_WORKSPACE_CONTEXT_BYTES
+            - context_bytes
+        )
+
+        if remaining <= 0:
+            sections.append(
+                "\n[Workspace context limit reached]"
+            )
+            break
+
+        if len(encoded) > remaining:
+            truncated = encoded[:remaining].decode(
+                "utf-8",
+                errors="ignore",
             )
 
-    return "\n".join(lines)
+            sections.append(
+                f"\nFILE: {relative_path}\n"
+                "--- BEGIN FILE ---\n"
+                f"{truncated}\n"
+                "--- END FILE (TRUNCATED) ---"
+            )
+
+            context_bytes += len(
+                truncated.encode("utf-8")
+            )
+
+            sections.append(
+                "\n[Workspace context limit reached]"
+            )
+            break
+
+        sections.append(
+            f"\nFILE: {relative_path}\n"
+            "--- BEGIN FILE ---\n"
+            f"{content}\n"
+            "--- END FILE ---"
+        )
+
+        context_bytes += len(encoded)
+
+    return "\n".join(sections)
 
 
 def build_task(
@@ -225,6 +300,18 @@ Rules:
 - Never request ../ path traversal.
 - Never write .git or .env files.
 - Return complete file contents, not patches.
+- You may create multiple files when the task requires a project.
+- Prefer a clean multi-file structure when responsibilities should be
+  separated into modules.
+- Existing workspace file contents are read-only context. Return a file
+  in the files list only when that file must be created or replaced.
+- Preserve existing project behavior unless the task requires changing
+  it.
+- Keep imports consistent with the workspace file structure.
+- The project entrypoint should import local modules normally when
+  appropriate.
+- Never create or modify nuttz-project.json. NUTTZ-OS owns the verified
+  project manifest.
 - Keep the implementation focused on the assigned task.
 - Do not claim files were written. NUTTZ-OS performs the writes after
   your response is validated.
@@ -246,7 +333,13 @@ Builder workspace:
 
 {context}
 
-Create the files required to complete this task.
+Create or update the files required to complete this task.
+
+When the task represents a complete application or project, design the
+workspace as a coherent multi-file project rather than forcing all
+logic into one file.
+
+Return only files that must be created or replaced.
 """.strip()
 
         response = chat_with_ollama(
