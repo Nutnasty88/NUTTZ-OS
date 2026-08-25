@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 
 const API_BASE = "http://127.0.0.1:8000/api";
+const PROJECT_MANIFEST_PATH = "nuttz-project.json";
 
 
 function formatBytes(value) {
@@ -39,6 +40,7 @@ export default function BuilderWorkspace({
   const [files, setFiles] = useState([]);
   const [selectedPath, setSelectedPath] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
+  const [projectManifest, setProjectManifest] = useState(null);
 
   const [loading, setLoading] = useState(true);
   const [fileLoading, setFileLoading] = useState(false);
@@ -98,6 +100,42 @@ export default function BuilderWorkspace({
 
       setFiles(nextFiles);
 
+      const manifestExists = nextFiles.some(
+        (file) =>
+          file.path === PROJECT_MANIFEST_PATH,
+      );
+
+      if (manifestExists) {
+        try {
+          const query = new URLSearchParams({
+            path: PROJECT_MANIFEST_PATH,
+          });
+
+          const manifestResponse = await fetch(
+            `${API_BASE}/missions/${missionId}/workspace/file?${query.toString()}`,
+          );
+
+          const manifestData = await manifestResponse
+            .json()
+            .catch(() => ({}));
+
+          if (manifestResponse.ok) {
+            const content =
+              manifestData.file?.content || "";
+
+            const parsed = JSON.parse(content);
+
+            setProjectManifest(parsed);
+          } else {
+            setProjectManifest(null);
+          }
+        } catch {
+          setProjectManifest(null);
+        }
+      } else {
+        setProjectManifest(null);
+      }
+
       setSelectedPath((current) => {
         if (
           current &&
@@ -115,6 +153,7 @@ export default function BuilderWorkspace({
       setFiles([]);
       setSelectedPath("");
       setSelectedFile(null);
+      setProjectManifest(null);
 
       setError(
         requestError.message ||
@@ -369,6 +408,283 @@ export default function BuilderWorkspace({
           </strong>
         </div>
       </div>
+
+
+      {projectManifest && (
+        <div
+          style={{
+            marginBottom: "14px",
+            padding: "12px",
+            background:
+              "rgba(77, 227, 165, 0.06)",
+            border:
+              "1px solid rgba(77, 227, 165, 0.28)",
+            borderRadius: "6px",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "10px",
+              flexWrap: "wrap",
+              marginBottom: "11px",
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  color: "#8fa2b7",
+                  fontSize: "10px",
+                  letterSpacing: "0.7px",
+                  textTransform: "uppercase",
+                }}
+              >
+                Project Summary
+              </div>
+
+              <strong
+                style={{
+                  display: "block",
+                  marginTop: "3px",
+                  color: "#e8f1fb",
+                }}
+              >
+                {projectManifest.name ||
+                  `mission-${missionId}`}
+              </strong>
+            </div>
+
+            <span
+              style={{
+                padding: "4px 8px",
+                color:
+                  projectManifest.verification
+                    ?.verified
+                    ? "#4de3a5"
+                    : "#ffd166",
+                background:
+                  projectManifest.verification
+                    ?.verified
+                    ? "rgba(77, 227, 165, 0.10)"
+                    : "rgba(255, 209, 102, 0.10)",
+                border:
+                  projectManifest.verification
+                    ?.verified
+                    ? "1px solid rgba(77, 227, 165, 0.30)"
+                    : "1px solid rgba(255, 209, 102, 0.30)",
+                borderRadius: "999px",
+                fontSize: "10px",
+                fontWeight: 700,
+                textTransform: "uppercase",
+              }}
+            >
+              {projectManifest.verification
+                ?.verified
+                ? "Verified Project"
+                : "Unverified Project"}
+            </span>
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                "repeat(auto-fit, minmax(150px, 1fr))",
+              gap: "8px",
+            }}
+          >
+            <div
+              style={{
+                padding: "8px 9px",
+                background: "#0a1524",
+                border: "1px solid #263b54",
+                borderRadius: "5px",
+              }}
+            >
+              <div
+                style={{
+                  color: "#71869e",
+                  fontSize: "9px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.6px",
+                }}
+              >
+                Runtime
+              </div>
+
+              <strong
+                style={{
+                  display: "block",
+                  marginTop: "4px",
+                  color: "#dce8f4",
+                  fontSize: "12px",
+                }}
+              >
+                {projectManifest.runtime || "Unknown"}
+              </strong>
+            </div>
+
+            <div
+              style={{
+                padding: "8px 9px",
+                background: "#0a1524",
+                border: "1px solid #263b54",
+                borderRadius: "5px",
+              }}
+            >
+              <div
+                style={{
+                  color: "#71869e",
+                  fontSize: "9px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.6px",
+                }}
+              >
+                Entrypoint
+              </div>
+
+              <strong
+                style={{
+                  display: "block",
+                  marginTop: "4px",
+                  color: "#dce8f4",
+                  fontSize: "12px",
+                  fontFamily: "monospace",
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {projectManifest.entrypoint ||
+                  "Unknown"}
+              </strong>
+            </div>
+
+            <div
+              style={{
+                padding: "8px 9px",
+                background: "#0a1524",
+                border: "1px solid #263b54",
+                borderRadius: "5px",
+              }}
+            >
+              <div
+                style={{
+                  color: "#71869e",
+                  fontSize: "9px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.6px",
+                }}
+              >
+                Schema
+              </div>
+
+              <strong
+                style={{
+                  display: "block",
+                  marginTop: "4px",
+                  color: "#dce8f4",
+                  fontSize: "12px",
+                }}
+              >
+                v{projectManifest.schema_version ?? "?"}
+              </strong>
+            </div>
+
+            <div
+              style={{
+                padding: "8px 9px",
+                background: "#0a1524",
+                border: "1px solid #263b54",
+                borderRadius: "5px",
+              }}
+            >
+              <div
+                style={{
+                  color: "#71869e",
+                  fontSize: "9px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.6px",
+                }}
+              >
+                Verified By
+              </div>
+
+              <strong
+                style={{
+                  display: "block",
+                  marginTop: "4px",
+                  color: "#4de3a5",
+                  fontSize: "12px",
+                }}
+              >
+                {projectManifest.verification
+                  ?.source || "Unknown"}
+              </strong>
+            </div>
+          </div>
+
+          <div
+            style={{
+              marginTop: "9px",
+              padding: "9px",
+              background: "#050c16",
+              border: "1px solid #263b54",
+              borderRadius: "5px",
+            }}
+          >
+            <div
+              style={{
+                color: "#71869e",
+                fontSize: "9px",
+                textTransform: "uppercase",
+                letterSpacing: "0.6px",
+              }}
+            >
+              Run Command
+            </div>
+
+            <code
+              style={{
+                display: "block",
+                marginTop: "5px",
+                color: "#dce8f4",
+                fontSize: "11px",
+                whiteSpace: "pre-wrap",
+                overflowWrap: "anywhere",
+              }}
+            >
+              {Array.isArray(
+                projectManifest.run_command,
+              )
+                ? projectManifest.run_command.join(
+                    " ",
+                  )
+                : "Unknown"}
+            </code>
+          </div>
+
+          {projectManifest.artifact?.sha256 && (
+            <div
+              title={
+                projectManifest.artifact.sha256
+              }
+              style={{
+                marginTop: "8px",
+                color: "#71869e",
+                fontSize: "10px",
+                fontFamily: "monospace",
+                overflowWrap: "anywhere",
+              }}
+            >
+              Artifact SHA256:{" "}
+              {shortHash(
+                projectManifest.artifact.sha256,
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
 
       {files.length === 0 ? (
