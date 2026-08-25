@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import BuilderWorkspace from "./BuilderWorkspace";
 
 
 const API_BASE = "http://127.0.0.1:8000/api";
@@ -366,6 +367,7 @@ export default function MissionQueue() {
   const [openResearchId, setOpenResearchId] = useState(null);
   const [openTasksId, setOpenTasksId] = useState(null);
   const [openDeliverableId, setOpenDeliverableId] = useState(null);
+  const [openWorkspaceId, setOpenWorkspaceId] = useState(null);
 
   const [missionDetails, setMissionDetails] = useState({});
   const [plans, setPlans] = useState({});
@@ -613,6 +615,7 @@ export default function MissionQueue() {
     setOpenResearchId(null);
     setOpenTasksId(null);
     setOpenDeliverableId(null);
+    setOpenWorkspaceId(null);
 
     try {
       await Promise.all([
@@ -690,6 +693,8 @@ export default function MissionQueue() {
   async function toggleDeliverable(missionId) {
     if (openDeliverableId === missionId) {
       setOpenDeliverableId(null);
+      setOpenWorkspaceId(null);
+    setOpenWorkspaceId(null);
       return;
     }
 
@@ -944,6 +949,8 @@ export default function MissionQueue() {
       setOpenPlanId(null);
       setOpenResearchId(null);
       setOpenDeliverableId(null);
+      setOpenWorkspaceId(null);
+    setOpenWorkspaceId(null);
       setOpenTasksId(missionId);
 
       await Promise.all([
@@ -961,6 +968,21 @@ export default function MissionQueue() {
     } finally {
       setWorkerActionMissionId(null);
     }
+  }
+
+
+  function toggleWorkspace(missionId) {
+    if (openWorkspaceId === missionId) {
+      setOpenWorkspaceId(null);
+      return;
+    }
+
+    setOpenDetailsId(null);
+    setOpenPlanId(null);
+    setOpenResearchId(null);
+    setOpenTasksId(null);
+    setOpenDeliverableId(null);
+    setOpenWorkspaceId(missionId);
   }
 
 
@@ -1217,6 +1239,8 @@ export default function MissionQueue() {
         const areTasksOpen = openTasksId === mission.id;
         const isDeliverableOpen =
           openDeliverableId === mission.id;
+        const isWorkspaceOpen =
+          openWorkspaceId === mission.id;
 
         const completedTasks = tasks.filter(
           (task) => task.status === "Completed",
@@ -1363,6 +1387,27 @@ export default function MissionQueue() {
                 {isResearchOpen
                   ? "Hide Research"
                   : "View Research"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  toggleWorkspace(mission.id)
+                }
+                style={{
+                  padding: "7px 13px",
+                  background: isWorkspaceOpen
+                    ? "#1b6f5b"
+                    : "#253246",
+                  color: "white",
+                  border: "1px solid #3c506b",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                }}
+              >
+                {isWorkspaceOpen
+                  ? "Hide Workspace"
+                  : "View Workspace"}
               </button>
 
               {policy.canViewReport && (
@@ -1709,6 +1754,12 @@ export default function MissionQueue() {
                   )}
                 </div>
               </div>
+            )}
+
+            {isWorkspaceOpen && (
+              <BuilderWorkspace
+                missionId={mission.id}
+              />
             )}
 
             {isDeliverableOpen && deliverable && (
