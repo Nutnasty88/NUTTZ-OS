@@ -12,6 +12,11 @@ from services.planner import create_plan, get_plan
 from app.services.researcher import get_research_report, research
 from app.services.reporter import create_deliverable, get_deliverable
 from services.autonomous_worker import get_worker_status, pause_worker, start_worker
+from services.workspace_executor import (
+    WorkspaceExecutionError,
+    launch_verified_project,
+)
+
 from services.workspace_manager import (
     WorkspaceConflictError,
     WorkspaceNotFoundError,
@@ -615,3 +620,35 @@ def get_mission_workspace_file(
         "mission_id": mission_id,
         "file": artifact,
     }
+
+
+@router.post("/{mission_id}/workspace/launch")
+def launch_mission_workspace_project(
+    mission_id: int,
+):
+    """
+    Launch only the entrypoint recorded in the verified
+    NUTTZ project manifest.
+
+    This endpoint deliberately accepts no command,
+    executable, arguments, or artifact path.
+    """
+    _require_mission(mission_id)
+
+    try:
+        result = launch_verified_project(
+            mission_id
+        )
+    except WorkspaceExecutionError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+    except (
+        WorkspaceNotFoundError,
+        WorkspacePathError,
+        WorkspaceConflictError,
+    ) as error:
+        raise _workspace_http_error(error) from error
+
+    return result
