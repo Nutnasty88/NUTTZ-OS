@@ -504,6 +504,70 @@ Return only files that must be created or replaced.
         raise
 
 
+def _traceback_workspace_targets(
+    workspace_name: str,
+    execution_evidence: dict[str, Any],
+) -> list[str]:
+    """
+    Extract workspace-local Python files implicated by execution stderr.
+
+    Targets are returned in traceback order, deduplicated, and restricted
+    to existing Python files inside the Builder workspace.
+    """
+    stderr = execution_evidence.get("stderr", "")
+
+    if not isinstance(stderr, str) or not stderr.strip():
+        return []
+
+    listing = list_workspace_files(workspace_name)
+
+    existing_python_paths = {
+        item.get("path")
+        for item in listing.get("files", [])
+        if (
+            isinstance(item, dict)
+            and isinstance(item.get("path"), str)
+            and item["path"].lower().endswith(".py")
+            and item["path"] != "nuttz-project.json"
+        )
+    }
+
+    if not existing_python_paths:
+        return []
+
+    workspace_marker = (
+        f"/builder-workspaces/{workspace_name}/"
+    )
+
+    matches = re.findall(
+        r'File "([^"]+\.py)"',
+        stderr,
+    )
+
+    targets = []
+
+    for filename in matches:
+        relative_path = None
+
+        if workspace_marker in filename:
+            relative_path = filename.split(
+                workspace_marker,
+                1,
+            )[1]
+
+        elif filename in existing_python_paths:
+            relative_path = filename
+
+        if (
+            relative_path
+            and relative_path in existing_python_paths
+            and relative_path not in targets
+        ):
+            targets.append(relative_path)
+
+    return targets
+
+
 def repair_artifact(
     mission_id: int,
     mission_title: str,
@@ -535,6 +599,17 @@ def repair_artifact(
         raise RuntimeError(
             "Builder repair was requested for an already verified artifact."
         )
+
+    traceback_targets = _traceback_workspace_targets(
+        workspace_name,
+        execution_evidence,
+    )
+
+    traceback_primary_target = (
+        traceback_targets[-1]
+        if traceback_targets
+        else None
+    )
 
     current_artifact = read_workspace_file(
         workspace_name,
@@ -653,6 +728,25 @@ Current entrypoint SHA256:
 
 Verified Workspace Executor failure evidence:
 {evidence_json}
+
+Workspace-local Python files found in traceback:
+{json.dumps(traceback_targets, indent=2)}
+
+Primary suspected repair target:
+{traceback_primary_target or "None"}
+
+Traceback targeting guidance:
+- The paths above were extracted only from workspace-local Python
+  traceback frames.
+- The deepest traceback-linked workspace file is the strongest initial
+  repair candidate.
+- Earlier files may simply be callers and should not be modified unless
+  their code actually contributes to the failure.
+- Prefer the primary suspected target when its contents explain the
+  exception.
+- You may repair another existing Python module when project context
+  shows that shared code is the actual cause.
+- Make the smallest coherent repair necessary.
 
 Read-only existing project context:
 --- BEGIN PROJECT CONTEXT ---
@@ -787,6 +881,10 @@ NUTTZ-OS will execute the original entrypoint again afterward.
             "verified": True,
             "workspace": workspace_name,
             "entrypoint": artifact_path,
+            "traceback_targets": traceback_targets,
+            "traceback_primary_target": (
+                traceback_primary_target
+            ),
             "file_count": len(changed_files),
             "files": changed_files,
         }
