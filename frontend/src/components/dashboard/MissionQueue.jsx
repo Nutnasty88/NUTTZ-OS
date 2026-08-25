@@ -284,6 +284,156 @@ function RepairConfidenceBadge({
 }
 
 
+function RepairConfidenceDetails({
+  confidence,
+}) {
+  if (!confidence) {
+    return null;
+  }
+
+  const reasons = Array.isArray(
+    confidence.reasons,
+  )
+    ? confidence.reasons
+    : [];
+
+  const deductions = Array.isArray(
+    confidence.deductions,
+  )
+    ? confidence.deductions
+    : [];
+
+  const tracebackTargets = Array.isArray(
+    confidence.traceback_targets,
+  )
+    ? confidence.traceback_targets
+    : [];
+
+  const changedFiles = Array.isArray(
+    confidence.changed_files,
+  )
+    ? confidence.changed_files
+    : [];
+
+  return (
+    <details
+      style={{
+        marginTop: "8px",
+        padding: "8px",
+        borderRadius: "5px",
+        border:
+          "1px solid rgba(120, 150, 185, 0.22)",
+        background:
+          "rgba(7, 15, 27, 0.45)",
+      }}
+    >
+      <summary
+        style={{
+          cursor: "pointer",
+          fontWeight: 700,
+          opacity: 0.9,
+        }}
+      >
+        Repair Confidence Details
+      </summary>
+
+      <div
+        style={{
+          marginTop: "9px",
+          display: "grid",
+          gap: "7px",
+          fontSize: "12px",
+          lineHeight: 1.45,
+        }}
+      >
+        <div>
+          <strong>Score:</strong>{" "}
+          {confidence.level || "Unknown"}{" "}
+          {confidence.score ?? "?"}
+        </div>
+
+        <div>
+          <strong>Primary target:</strong>{" "}
+          <code>
+            {confidence.primary_target ||
+              "None"}
+          </code>
+        </div>
+
+        <div>
+          <strong>
+            Primary target repaired:
+          </strong>{" "}
+          {confidence.primary_target_repaired
+            ? "Yes"
+            : "No"}
+        </div>
+
+        <div>
+          <strong>Changed files:</strong>{" "}
+          {changedFiles.length
+            ? changedFiles.join(", ")
+            : "None"}
+        </div>
+
+        <div>
+          <strong>Traceback targets:</strong>{" "}
+          {tracebackTargets.length
+            ? tracebackTargets.join(" → ")
+            : "None"}
+        </div>
+
+        {reasons.length > 0 && (
+          <div>
+            <strong>Reasons:</strong>
+            <ul
+              style={{
+                margin:
+                  "5px 0 0 18px",
+                padding: 0,
+              }}
+            >
+              {reasons.map(
+                (reason, index) => (
+                  <li
+                    key={`reason-${index}`}
+                  >
+                    {reason}
+                  </li>
+                ),
+              )}
+            </ul>
+          </div>
+        )}
+
+        {deductions.length > 0 && (
+          <div>
+            <strong>Deductions:</strong>
+            <ul
+              style={{
+                margin:
+                  "5px 0 0 18px",
+                padding: 0,
+              }}
+            >
+              {deductions.map(
+                (deduction, index) => (
+                  <li
+                    key={`deduction-${index}`}
+                  >
+                    {deduction}
+                  </li>
+                ),
+              )}
+            </ul>
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+
 function parseWorkspaceExecutionResult(result) {
   if (
     typeof result !== "string" ||
@@ -543,6 +693,12 @@ function BuilderAutoExecutionEvidence({ result }) {
         </div>
       )}
 
+      <RepairConfidenceDetails
+        confidence={
+          execution.repairConfidence
+        }
+      />
+
       {execution.reason && (
         <div
           style={{
@@ -701,6 +857,12 @@ function WorkspaceExecutionEvidence({ result }) {
             "Artifact repaired and retested successfully."}
         </div>
       )}
+
+      <RepairConfidenceDetails
+        confidence={
+          execution.repairConfidence
+        }
+      />
 
       <details style={{ marginTop: "10px" }}>
         <summary
