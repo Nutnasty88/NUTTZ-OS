@@ -24,6 +24,14 @@ EXECUTION_TIMEOUT_SECONDS: Final = 15
 
 OUTPUT_LIMIT: Final = 6000
 
+PYTHON_WORKSPACE_BOOTSTRAP: Final = (
+    "import runpy, sys; "
+    "entrypoint = sys.argv[1]; "
+    "import_root = sys.argv[2]; "
+    "sys.path.insert(0, import_root); "
+    "runpy.run_path(entrypoint, run_name='__main__')"
+)
+
 
 class WorkspaceExecutionError(RuntimeError):
     """Raised when isolated Builder workspace execution is denied."""
@@ -198,7 +206,10 @@ def execute_python_artifact(
         python_executable,
         "-I",
         "-B",
+        "-c",
+        PYTHON_WORKSPACE_BOOTSTRAP,
         str(target),
+        str(target.parent),
     ]
 
     started = time.monotonic()
@@ -243,12 +254,7 @@ def execute_python_artifact(
             "artifact_sha256": artifact["sha256"],
             "artifact_size_bytes": artifact["size_bytes"],
             "interpreter": python_executable,
-            "command": [
-                python_executable,
-                "-I",
-                "-B",
-                artifact["path"],
-            ],
+            "command": command,
             "status": (
                 "success"
                 if verified
@@ -287,12 +293,7 @@ def execute_python_artifact(
             "artifact_sha256": artifact["sha256"],
             "artifact_size_bytes": artifact["size_bytes"],
             "interpreter": python_executable,
-            "command": [
-                python_executable,
-                "-I",
-                "-B",
-                artifact["path"],
-            ],
+            "command": command,
             "status": "timeout",
             "exit_code": None,
             "duration_ms": duration_ms,
@@ -320,12 +321,7 @@ def execute_python_artifact(
             "artifact_sha256": artifact["sha256"],
             "artifact_size_bytes": artifact["size_bytes"],
             "interpreter": python_executable,
-            "command": [
-                python_executable,
-                "-I",
-                "-B",
-                artifact["path"],
-            ],
+            "command": command,
             "status": "error",
             "exit_code": None,
             "duration_ms": duration_ms,
