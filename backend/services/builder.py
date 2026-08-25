@@ -132,8 +132,29 @@ def _parse_builder_response(
     if not isinstance(summary, str):
         summary = str(summary)
 
+    entrypoint = payload.get("entrypoint")
+
+    if entrypoint is not None:
+        if (
+            not isinstance(entrypoint, str)
+            or not entrypoint.strip()
+        ):
+            raise RuntimeError(
+                "Builder Agent entrypoint must be a non-empty "
+                "relative path or null."
+            )
+
+        entrypoint = entrypoint.strip()
+
+        if not entrypoint.lower().endswith(".py"):
+            raise RuntimeError(
+                "Builder Agent v1 currently requires a Python "
+                "entrypoint."
+            )
+
     return {
         "summary": summary.strip(),
+        "entrypoint": entrypoint,
         "files": normalized_files,
     }
 
@@ -282,6 +303,7 @@ Required format:
 
 {
   "summary": "short description of what was built",
+  "entrypoint": "main.py or null",
   "files": [
     {
       "path": "relative/path/to/file",
@@ -301,6 +323,12 @@ Rules:
 - Never write .git or .env files.
 - Return complete file contents, not patches.
 - You may create multiple files when the task requires a project.
+- For a runnable Python application or project, set "entrypoint" to the
+  relative Python file that should be executed, normally main.py.
+- For a task that does not define or maintain a runnable application,
+  set "entrypoint" to null.
+- The entrypoint may already exist in the workspace and does not need to
+  be returned in "files" unless its contents must change.
 - Prefer a clean multi-file structure when responsibilities should be
   separated into modules.
 - Existing workspace file contents are read-only context. Return a file
@@ -394,6 +422,30 @@ Return only files that must be created or replaced.
                 }
             )
 
+        selected_entrypoint = build_plan.get(
+            "entrypoint"
+        )
+
+        entrypoint_artifact = None
+
+        if selected_entrypoint:
+            try:
+                entrypoint_artifact = read_workspace_file(
+                    workspace_name,
+                    selected_entrypoint,
+                )
+            except Exception as error:
+                raise RuntimeError(
+                    "Builder Agent selected an entrypoint that "
+                    "does not exist in the workspace: "
+                    f"{selected_entrypoint}"
+                ) from error
+
+            if not selected_entrypoint.lower().endswith(".py"):
+                raise RuntimeError(
+                    "Builder Agent selected a non-Python entrypoint."
+                )
+
         final_workspace = get_workspace(workspace_name)
 
         evidence = {
@@ -403,7 +455,16 @@ Return only files that must be created or replaced.
             "workspace_path": final_workspace.get("path"),
             "file_count": len(written_files),
             "files": written_files,
+            "entrypoint": selected_entrypoint,
         }
+
+        if entrypoint_artifact:
+            evidence["entrypoint_sha256"] = (
+                entrypoint_artifact["sha256"]
+            )
+            evidence["entrypoint_size_bytes"] = (
+                entrypoint_artifact["size_bytes"]
+            )
 
         log_event(
             mission_id,
@@ -424,6 +485,7 @@ Return only files that must be created or replaced.
             "model": BUILDER_MODEL,
             "summary": build_plan["summary"],
             "workspace": workspace_name,
+            "entrypoint": selected_entrypoint,
             "artifacts": written_files,
             "evidence": evidence,
         }

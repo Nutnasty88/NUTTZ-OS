@@ -303,6 +303,73 @@ def _is_workspace_execution_task(task: Any) -> bool:
     )
 
 
+def _latest_builder_entrypoint(
+    mission_id: int,
+) -> str | None:
+    """
+    Return the newest validated Builder entrypoint recorded for
+    this mission.
+
+    Builder task results are persisted by NUTTZ-OS after Workspace
+    Manager has verified the referenced file exists.
+    """
+    conn = get_connection()
+
+    try:
+        rows = conn.execute(
+            """
+            SELECT result
+            FROM mission_tasks
+            WHERE
+                mission_id=?
+                AND status='Completed'
+                AND result LIKE 'BUILDER AGENT: COMPLETED%'
+            ORDER BY position DESC, id DESC
+            """,
+            (mission_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    marker = "VERIFIED BUILDER EVIDENCE:\n"
+
+    for row in rows:
+        result = row["result"]
+
+        if (
+            not isinstance(result, str)
+            or marker not in result
+        ):
+            continue
+
+        evidence_text = result.split(
+            marker,
+            1,
+        )[1].strip()
+
+        try:
+            evidence = json.loads(evidence_text)
+        except json.JSONDecodeError:
+            continue
+
+        if (
+            not isinstance(evidence, dict)
+            or evidence.get("verified") is not True
+        ):
+            continue
+
+        entrypoint = evidence.get("entrypoint")
+
+        if (
+            isinstance(entrypoint, str)
+            and entrypoint.strip()
+            and entrypoint.lower().endswith(".py")
+        ):
+            return entrypoint.strip()
+
+    return None
+
+
 def _select_python_artifact(
     mission_id: int,
     task: Any,
@@ -328,6 +395,13 @@ def _select_python_artifact(
     if explicit_matches:
         return explicit_matches[0]
 
+    builder_entrypoint = _latest_builder_entrypoint(
+        mission_id
+    )
+
+    if builder_entrypoint:
+        return builder_entrypoint
+
     workspace_name = f"mission-{mission_id}"
 
     listing = list_workspace_files(
@@ -349,8 +423,10 @@ def _select_python_artifact(
 
     if len(python_files) != 1:
         raise RuntimeError(
-            "Workspace Executor v1 requires exactly one Python "
-            "artifact when the task does not name a specific file."
+            "Workspace Executor could not determine the project "
+            "entrypoint. The execution task did not name a Python "
+            "file, no validated Builder entrypoint was available, "
+            "and the workspace contains multiple Python files."
         )
 
     return python_files[0]
@@ -741,7 +817,12 @@ def _complete_builder_task(
         result = (
             "BUILDER AGENT: COMPLETED\n\n"
             f"{builder_result.get('summary', 'Builder task completed.')}\n\n"
-            "VERIFIED BUILDER EVIDENCE:\n"
+            + (
+                f"ENTRYPOINT: {builder_result['entrypoint']}\n\n"
+                if builder_result.get("entrypoint")
+                else ""
+            )
+            + "VERIFIED BUILDER EVIDENCE:\n"
             + json.dumps(
                 evidence,
                 indent=2,
