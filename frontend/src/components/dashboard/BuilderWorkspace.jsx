@@ -41,12 +41,15 @@ export default function BuilderWorkspace({
   const [selectedPath, setSelectedPath] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
   const [projectManifest, setProjectManifest] = useState(null);
+  const [launchResult, setLaunchResult] = useState(null);
 
   const [loading, setLoading] = useState(true);
+  const [launching, setLaunching] = useState(false);
   const [fileLoading, setFileLoading] = useState(false);
 
   const [error, setError] = useState("");
   const [fileError, setFileError] = useState("");
+  const [launchError, setLaunchError] = useState("");
 
 
   const loadWorkspace = useCallback(async () => {
@@ -154,6 +157,8 @@ export default function BuilderWorkspace({
       setSelectedPath("");
       setSelectedFile(null);
       setProjectManifest(null);
+      setLaunchResult(null);
+      setLaunchError("");
 
       setError(
         requestError.message ||
@@ -209,6 +214,42 @@ export default function BuilderWorkspace({
     },
     [missionId],
   );
+
+
+  async function launchProject() {
+    setLaunching(true);
+    setLaunchError("");
+    setLaunchResult(null);
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/missions/${missionId}/workspace/launch`,
+        {
+          method: "POST",
+        },
+      );
+
+      const data = await response
+        .json()
+        .catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail ||
+            `Project launch failed with HTTP ${response.status}.`,
+        );
+      }
+
+      setLaunchResult(data);
+    } catch (requestError) {
+      setLaunchError(
+        requestError.message ||
+          "Project launch failed.",
+      );
+    } finally {
+      setLaunching(false);
+    }
+  }
 
 
   useEffect(() => {
@@ -456,7 +497,43 @@ export default function BuilderWorkspace({
               </strong>
             </div>
 
-            <span
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                flexWrap: "wrap",
+              }}
+            >
+              {projectManifest.verification
+                ?.verified && (
+                <button
+                  type="button"
+                  onClick={launchProject}
+                  disabled={launching}
+                  style={{
+                    padding: "6px 10px",
+                    color: "#08150f",
+                    background: launching
+                      ? "#7aa897"
+                      : "#4de3a5",
+                    border:
+                      "1px solid rgba(77, 227, 165, 0.55)",
+                    borderRadius: "5px",
+                    cursor: launching
+                      ? "wait"
+                      : "pointer",
+                    fontSize: "11px",
+                    fontWeight: 800,
+                  }}
+                >
+                  {launching
+                    ? "Launching..."
+                    : "Launch Project"}
+                </button>
+              )}
+
+              <span
               style={{
                 padding: "4px 8px",
                 color:
@@ -484,7 +561,8 @@ export default function BuilderWorkspace({
                 ?.verified
                 ? "Verified Project"
                 : "Unverified Project"}
-            </span>
+              </span>
+            </div>
           </div>
 
           <div
@@ -680,6 +758,189 @@ export default function BuilderWorkspace({
               Artifact SHA256:{" "}
               {shortHash(
                 projectManifest.artifact.sha256,
+              )}
+            </div>
+          )}
+          {(launchResult || launchError) && (
+            <div
+              style={{
+                marginTop: "10px",
+                padding: "10px",
+                background: "#050c16",
+                border: launchResult?.success
+                  ? "1px solid rgba(77, 227, 165, 0.30)"
+                  : "1px solid rgba(255, 123, 123, 0.30)",
+                borderRadius: "5px",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: "8px",
+                  flexWrap: "wrap",
+                  marginBottom: "8px",
+                }}
+              >
+                <strong
+                  style={{
+                    color: launchResult?.success
+                      ? "#4de3a5"
+                      : "#ff7b7b",
+                    fontSize: "11px",
+                  }}
+                >
+                  {launchResult?.success
+                    ? "Launch Verified"
+                    : "Launch Failed"}
+                </strong>
+
+                {launchResult?.verified_manifest && (
+                  <span
+                    style={{
+                      color: "#8fa2b7",
+                      fontSize: "10px",
+                    }}
+                  >
+                    Manifest verified
+                  </span>
+                )}
+              </div>
+
+              {launchError && (
+                <div
+                  style={{
+                    color: "#ff7b7b",
+                    fontSize: "11px",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {launchError}
+                </div>
+              )}
+
+              {launchResult?.execution && (
+                <>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "8px",
+                      flexWrap: "wrap",
+                      marginBottom: "8px",
+                      color: "#aab8c8",
+                      fontSize: "10px",
+                    }}
+                  >
+                    <span>
+                      Exit:{" "}
+                      <strong
+                        style={{
+                          color:
+                            launchResult.execution
+                              .exit_code === 0
+                              ? "#4de3a5"
+                              : "#ff7b7b",
+                        }}
+                      >
+                        {launchResult.execution
+                          .exit_code ?? "n/a"}
+                      </strong>
+                    </span>
+
+                    <span>
+                      Duration:{" "}
+                      <strong>
+                        {launchResult.execution
+                          .duration_ms ?? 0}
+                        ms
+                      </strong>
+                    </span>
+
+                    <span>
+                      Status:{" "}
+                      <strong>
+                        {launchResult.execution
+                          .status || "unknown"}
+                      </strong>
+                    </span>
+                  </div>
+
+                  {launchResult.execution.stdout && (
+                    <div
+                      style={{
+                        marginTop: "6px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          color: "#71869e",
+                          fontSize: "9px",
+                          textTransform:
+                            "uppercase",
+                          letterSpacing: "0.6px",
+                        }}
+                      >
+                        Stdout
+                      </div>
+
+                      <pre
+                        style={{
+                          margin: "5px 0 0",
+                          padding: "8px",
+                          color: "#dce8f4",
+                          background: "#02070d",
+                          border:
+                            "1px solid #263b54",
+                          borderRadius: "4px",
+                          whiteSpace: "pre-wrap",
+                          overflowWrap: "anywhere",
+                          fontSize: "10px",
+                          lineHeight: 1.45,
+                        }}
+                      >
+                        {launchResult.execution.stdout}
+                      </pre>
+                    </div>
+                  )}
+
+                  {launchResult.execution.stderr && (
+                    <div
+                      style={{
+                        marginTop: "6px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          color: "#ff9f6e",
+                          fontSize: "9px",
+                          textTransform:
+                            "uppercase",
+                          letterSpacing: "0.6px",
+                        }}
+                      >
+                        Stderr
+                      </div>
+
+                      <pre
+                        style={{
+                          margin: "5px 0 0",
+                          padding: "8px",
+                          color: "#ffb49b",
+                          background: "#120907",
+                          border:
+                            "1px solid rgba(255, 123, 123, 0.25)",
+                          borderRadius: "4px",
+                          whiteSpace: "pre-wrap",
+                          overflowWrap: "anywhere",
+                          fontSize: "10px",
+                          lineHeight: 1.45,
+                        }}
+                      >
+                        {launchResult.execution.stderr}
+                      </pre>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
