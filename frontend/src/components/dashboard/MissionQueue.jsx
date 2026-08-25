@@ -252,10 +252,18 @@ function parseBuilderAutoExecutionResult(result) {
     /^Reason:\s*(.*)$/m,
   );
 
+  const repairMatch = result.match(
+    /AUTO REPAIR:\s*SUCCESS\s*\n([^\n]*)/,
+  );
+
   return {
     verified,
     deferred,
     failed,
+    repaired: Boolean(repairMatch),
+    repairSummary: repairMatch
+      ? repairMatch[1].trim()
+      : "",
     entrypoint: entrypointMatch
       ? entrypointMatch[1].trim()
       : "",
@@ -339,6 +347,22 @@ function BuilderAutoExecutionEvidence({ result }) {
         >
           {statusLabel}
         </span>
+
+        {execution.repaired && (
+          <span
+            style={{
+              padding: "2px 7px",
+              borderRadius: "999px",
+              fontSize: "11px",
+              fontWeight: 700,
+              color: "#55a7ff",
+              background:
+                "rgba(85, 167, 255, 0.12)",
+            }}
+          >
+            AUTO REPAIR ✓
+          </span>
+        )}
       </div>
 
       {execution.entrypoint && (
@@ -359,6 +383,23 @@ function BuilderAutoExecutionEvidence({ result }) {
         <div style={{ marginBottom: "5px" }}>
           <strong>Output:</strong>{" "}
           <code>{execution.stdout}</code>
+        </div>
+      )}
+
+      {execution.repaired && (
+        <div
+          style={{
+            marginTop: "8px",
+            padding: "8px",
+            borderRadius: "4px",
+            color: "#9cc7ff",
+            background:
+              "rgba(85, 167, 255, 0.07)",
+          }}
+        >
+          <strong>Builder Repair:</strong>{" "}
+          {execution.repairSummary ||
+            "Entrypoint repaired and retested successfully."}
         </div>
       )}
 
