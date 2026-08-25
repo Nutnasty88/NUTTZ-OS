@@ -169,6 +169,121 @@ function missionPolicy(status) {
 }
 
 
+function parseJsonEvidenceBlock(
+  result,
+  marker,
+  nextMarkers = [],
+) {
+  if (
+    typeof result !== "string" ||
+    !result.includes(marker)
+  ) {
+    return null;
+  }
+
+  const start = result.indexOf(marker);
+
+  if (start < 0) {
+    return null;
+  }
+
+  const jsonStart = start + marker.length;
+
+  let jsonEnd = result.length;
+
+  for (const nextMarker of nextMarkers) {
+    const candidate = result.indexOf(
+      nextMarker,
+      jsonStart,
+    );
+
+    if (
+      candidate >= 0 &&
+      candidate < jsonEnd
+    ) {
+      jsonEnd = candidate;
+    }
+  }
+
+  const raw = result
+    .slice(jsonStart, jsonEnd)
+    .trim();
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+
+    if (
+      parsed &&
+      typeof parsed === "object"
+    ) {
+      return parsed;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+
+function RepairConfidenceBadge({
+  confidence,
+}) {
+  if (!confidence) {
+    return null;
+  }
+
+  const score = Number(
+    confidence.score,
+  );
+
+  const level = String(
+    confidence.level || "",
+  ).toUpperCase();
+
+  const safeScore = Number.isFinite(score)
+    ? score
+    : "?";
+
+  const color =
+    level === "HIGH"
+      ? "#4de3a5"
+      : level === "MEDIUM"
+        ? "#ffd166"
+        : "#ff9c9c";
+
+  return (
+    <span
+      title={[
+        ...(Array.isArray(confidence.reasons)
+          ? confidence.reasons
+          : []),
+        ...(Array.isArray(confidence.deductions)
+          ? confidence.deductions
+          : []),
+      ].join("\n")}
+      style={{
+        padding: "2px 7px",
+        borderRadius: "999px",
+        fontSize: "11px",
+        fontWeight: 700,
+        color,
+        background: `${color}18`,
+        border: `1px solid ${color}33`,
+      }}
+    >
+      REPAIR CONFIDENCE:{" "}
+      {level || "UNKNOWN"}{" "}
+      {safeScore}
+    </span>
+  );
+}
+
+
 function parseWorkspaceExecutionResult(result) {
   if (
     typeof result !== "string" ||
@@ -193,6 +308,14 @@ function parseWorkspaceExecutionResult(result) {
     /AUTO REPAIR:\s*SUCCESS\s*\n([^\n]*)/,
   );
 
+  const repairConfidence = parseJsonEvidenceBlock(
+    result,
+    "REPAIR CONFIDENCE:\n",
+    [
+      "\n\nVERIFIED EXECUTION EVIDENCE:",
+    ],
+  );
+
   return {
     verified: result.includes(
       "WORKSPACE EXECUTION: VERIFIED",
@@ -210,6 +333,7 @@ function parseWorkspaceExecutionResult(result) {
     repairSummary: repairMatch
       ? repairMatch[1].trim()
       : "",
+    repairConfidence,
     raw: result,
   };
 }
@@ -256,6 +380,15 @@ function parseBuilderAutoExecutionResult(result) {
     /AUTO REPAIR:\s*SUCCESS\s*\n([^\n]*)/,
   );
 
+  const repairConfidence = parseJsonEvidenceBlock(
+    result,
+    "AUTO REPAIR CONFIDENCE:\n",
+    [
+      "\n\nVERIFIED AUTO EXECUTION EVIDENCE:",
+      "\nVERIFIED AUTO EXECUTION EVIDENCE:",
+    ],
+  );
+
   return {
     verified,
     deferred,
@@ -264,6 +397,7 @@ function parseBuilderAutoExecutionResult(result) {
     repairSummary: repairMatch
       ? repairMatch[1].trim()
       : "",
+    repairConfidence,
     entrypoint: entrypointMatch
       ? entrypointMatch[1].trim()
       : "",
@@ -363,6 +497,12 @@ function BuilderAutoExecutionEvidence({ result }) {
             AUTO REPAIR ✓
           </span>
         )}
+
+        <RepairConfidenceBadge
+          confidence={
+            execution.repairConfidence
+          }
+        />
       </div>
 
       {execution.entrypoint && (
@@ -516,6 +656,13 @@ function WorkspaceExecutionEvidence({ result }) {
             AUTO REPAIR ✓
           </span>
         )}
+
+
+        <RepairConfidenceBadge
+          confidence={
+            execution.repairConfidence
+          }
+        />
       </div>
 
       {execution.artifact && (
