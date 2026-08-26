@@ -8,8 +8,12 @@ from services.builder import build_task, repair_artifact
 from services.ollama_service import chat_with_ollama
 from services.tool_runner import run_tool
 from services.workspace_executor import execute_python_artifact
-from services.workspace_manager import list_workspace_files
-from services.workspace_manager import write_project_manifest
+from services.workspace_manager import (
+    list_workspace_files,
+    read_workspace_file,
+    write_project_manifest,
+    write_workspace_file,
+)
 
 
 EXECUTOR_MODEL = "qwen3:8b"
@@ -893,6 +897,133 @@ def _repair_confidence(
     }
 
 
+def _repair_result_for_evidence(
+    repair_result: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """
+    Return repair data safe for persisted/logged evidence.
+
+    Internal rollback snapshots contain complete pre-repair file
+    contents and must never be copied into task result evidence.
+    """
+    if not repair_result:
+        return None
+
+    return {
+        key: value
+        for key, value in repair_result.items()
+        if key != "rollback_snapshot"
+    }
+
+
+def _rollback_failed_builder_repair(
+    mission_id: int,
+    task_position: int,
+    repair_result: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """
+    Restore the exact pre-repair files when repaired execution fails.
+
+    Builder repair is only allowed to modify files that already existed,
+    so every rollback target must have a verified pre-repair snapshot.
+    """
+    if not repair_result:
+        return None
+
+    workspace_name = repair_result.get("workspace")
+    rollback_snapshot = repair_result.get("rollback_snapshot")
+
+    if (
+        not isinstance(workspace_name, str)
+        or not workspace_name
+        or not isinstance(rollback_snapshot, dict)
+        or not rollback_snapshot
+    ):
+        raise RuntimeError(
+            "Builder post-repair rollback snapshot is missing or invalid."
+        )
+
+    restored_files = []
+    rollback_errors = []
+
+    for relative_path, snapshot in reversed(
+        list(rollback_snapshot.items())
+    ):
+        if (
+            not isinstance(relative_path, str)
+            or not relative_path
+            or not isinstance(snapshot, dict)
+            or not isinstance(snapshot.get("content"), str)
+            or not isinstance(snapshot.get("sha256"), str)
+        ):
+            rollback_errors.append(
+                f"{relative_path}: invalid rollback snapshot"
+            )
+            continue
+
+        try:
+            write_result = write_workspace_file(
+                workspace_name,
+                relative_path,
+                snapshot["content"],
+            )
+
+            verification = read_workspace_file(
+                workspace_name,
+                relative_path,
+            )
+
+            if verification["sha256"] != snapshot["sha256"]:
+                raise RuntimeError(
+                    "restored SHA256 does not match "
+                    "pre-repair snapshot"
+                )
+
+            if write_result["sha256"] != snapshot["sha256"]:
+                raise RuntimeError(
+                    "rollback write SHA256 does not match "
+                    "pre-repair snapshot"
+                )
+
+            restored_files.append(
+                {
+                    "path": relative_path,
+                    "sha256": verification["sha256"],
+                    "verified": True,
+                }
+            )
+
+        except Exception as rollback_error:
+            rollback_errors.append(
+                f"{relative_path}: {rollback_error}"
+            )
+
+    if rollback_errors:
+        raise RuntimeError(
+            "Post-repair execution failed and Builder rollback was "
+            "incomplete. Rollback errors: "
+            + "; ".join(rollback_errors)
+        )
+
+    log_event(
+        mission_id,
+        "Workspace Executor",
+        "repair_execution_rollback",
+        (
+            f"Restored {len(restored_files)} pre-repair file(s) "
+            f"after repaired execution failed for task "
+            f"{task_position}"
+        ),
+    )
+
+    return {
+        "workspace": workspace_name,
+        "restored": True,
+        "file_count": len(restored_files),
+        "files": restored_files,
+    }
+
+
 def _complete_workspace_execution_task(
     mission: Any,
     task: Any,
@@ -963,24 +1094,34 @@ def _complete_workspace_execution_task(
                 artifact_path,
             )
 
-        if not evidence.get("verified"):
+        if (
+            not evidence.get("verified")
+            or evidence.get("exit_code") != 0
+        ):
+            rollback_result = None
+
+            if repair_result:
+                rollback_result = _rollback_failed_builder_repair(
+                    mission_id,
+                    int(task["position"]),
+                    repair_result,
+                )
+
             raise RuntimeError(
                 "Workspace artifact failed execution after one "
                 "automatic Builder repair attempt.\n\n"
                 + json.dumps(
                     {
                         "initial_execution": initial_evidence,
-                        "repair": repair_result,
+                        "repair": _repair_result_for_evidence(
+                            repair_result
+                        ),
                         "final_execution": evidence,
+                        "rollback": rollback_result,
                     },
                     indent=2,
                     sort_keys=True,
                 )
-            )
-
-        if evidence.get("exit_code") != 0:
-            raise RuntimeError(
-                "Workspace artifact returned a non-zero exit code."
             )
 
         manifest_result = write_project_manifest(
@@ -1485,6 +1626,17 @@ def _complete_builder_task(
                     not auto_execution.get("verified")
                     or auto_execution.get("exit_code") != 0
                 ):
+                    rollback_result = None
+
+                    if auto_repair:
+                        rollback_result = (
+                            _rollback_failed_builder_repair(
+                                mission_id,
+                                int(task["position"]),
+                                auto_repair,
+                            )
+                        )
+
                     raise RuntimeError(
                         "Automatic Builder project verification failed "
                         "after one automatic repair attempt."
@@ -1493,8 +1645,12 @@ def _complete_builder_task(
                             {
                                 "initial_execution":
                                     initial_auto_execution,
-                                "repair": auto_repair,
+                                "repair":
+                                    _repair_result_for_evidence(
+                                        auto_repair
+                                    ),
                                 "final_execution": auto_execution,
+                                "rollback": rollback_result,
                             },
                             indent=2,
                             sort_keys=True,

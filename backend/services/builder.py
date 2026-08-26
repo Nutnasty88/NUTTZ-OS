@@ -1091,6 +1091,15 @@ NUTTZ-OS will execute the original entrypoint again afterward.
                 for item in changed_files
             ],
             "evidence": repair_evidence,
+            "rollback_snapshot": {
+                relative_path: {
+                    "path": previous["path"],
+                    "content": previous["content"],
+                    "sha256": previous["sha256"],
+                    "size_bytes": previous["size_bytes"],
+                }
+                for relative_path, previous in before_files.items()
+            },
         }
 
     except Exception as error:
