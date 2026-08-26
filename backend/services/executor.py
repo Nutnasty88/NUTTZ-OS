@@ -435,6 +435,315 @@ def _select_python_artifact(
     return python_files[0]
 
 
+def ensure_repair_history_table() -> None:
+    """
+    Ensure durable Builder repair history storage exists.
+
+    Repair history is intentionally separate from mission_tasks.result
+    and mission_events so verified repair evidence remains structured
+    and queryable across the lifetime of a mission.
+    """
+    conn = get_connection()
+
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mission_repair_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id INTEGER NOT NULL,
+                task_id INTEGER NOT NULL,
+                task_position INTEGER NOT NULL,
+                workspace TEXT NOT NULL,
+                entrypoint TEXT NOT NULL,
+                summary TEXT NOT NULL DEFAULT '',
+                confidence_score INTEGER,
+                confidence_level TEXT,
+                verified INTEGER NOT NULL DEFAULT 0,
+                primary_target TEXT,
+                primary_target_repaired INTEGER NOT NULL DEFAULT 0,
+                traceback_targets TEXT NOT NULL DEFAULT '[]',
+                changed_files TEXT NOT NULL DEFAULT '[]',
+                repair_evidence TEXT NOT NULL DEFAULT '{}',
+                final_execution TEXT NOT NULL DEFAULT '{}',
+                confidence_evidence TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (mission_id) REFERENCES missions(id),
+                FOREIGN KEY (task_id) REFERENCES mission_tasks(id)
+            )
+            """
+        )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
+def record_repair_history(
+    mission_id: int,
+    task_id: int,
+    task_position: int,
+    repair_result: dict[str, Any],
+    final_execution: dict[str, Any],
+    confidence: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """
+    Persist one independently verified Builder repair attempt.
+
+    JSON evidence is stored verbatim so future UI/reporting code can
+    inspect the original deterministic evidence without reparsing the
+    human-readable mission task result.
+    """
+    ensure_repair_history_table()
+
+    repair_evidence = repair_result.get("evidence", {})
+
+    if not isinstance(repair_evidence, dict):
+        repair_evidence = {}
+
+    if not isinstance(confidence, dict):
+        confidence = {}
+
+    traceback_targets = confidence.get(
+        "traceback_targets",
+        repair_evidence.get(
+            "traceback_targets",
+            [],
+        ),
+    )
+
+    if not isinstance(traceback_targets, list):
+        traceback_targets = []
+
+    changed_files = confidence.get(
+        "changed_files",
+        [],
+    )
+
+    if not isinstance(changed_files, list):
+        changed_files = []
+
+    workspace = repair_result.get(
+        "workspace",
+        repair_evidence.get("workspace", ""),
+    )
+
+    entrypoint = repair_result.get(
+        "entrypoint",
+        repair_evidence.get("entrypoint", ""),
+    )
+
+    summary = repair_result.get("summary", "")
+
+    primary_target = confidence.get(
+        "primary_target",
+        repair_evidence.get(
+            "traceback_primary_target"
+        ),
+    )
+
+    verified = (
+        final_execution.get("verified") is True
+        and final_execution.get("exit_code") == 0
+    )
+
+    conn = get_connection()
+
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO mission_repair_history (
+                mission_id,
+                task_id,
+                task_position,
+                workspace,
+                entrypoint,
+                summary,
+                confidence_score,
+                confidence_level,
+                verified,
+                primary_target,
+                primary_target_repaired,
+                traceback_targets,
+                changed_files,
+                repair_evidence,
+                final_execution,
+                confidence_evidence
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                mission_id,
+                task_id,
+                task_position,
+                str(workspace),
+                str(entrypoint),
+                str(summary),
+                confidence.get("score"),
+                confidence.get("level"),
+                1 if verified else 0,
+                primary_target,
+                (
+                    1
+                    if confidence.get(
+                        "primary_target_repaired"
+                    ) is True
+                    else 0
+                ),
+                json.dumps(
+                    traceback_targets,
+                    sort_keys=True,
+                ),
+                json.dumps(
+                    changed_files,
+                    sort_keys=True,
+                ),
+                json.dumps(
+                    repair_evidence,
+                    sort_keys=True,
+                ),
+                json.dumps(
+                    final_execution,
+                    sort_keys=True,
+                ),
+                json.dumps(
+                    confidence,
+                    sort_keys=True,
+                ),
+            ),
+        )
+
+        conn.commit()
+
+        history_id = cursor.lastrowid
+
+    finally:
+        conn.close()
+
+    return {
+        "id": history_id,
+        "mission_id": mission_id,
+        "task_id": task_id,
+        "task_position": task_position,
+        "workspace": str(workspace),
+        "entrypoint": str(entrypoint),
+        "summary": str(summary),
+        "confidence_score": confidence.get(
+            "score"
+        ),
+        "confidence_level": confidence.get(
+            "level"
+        ),
+        "verified": verified,
+        "primary_target": primary_target,
+        "primary_target_repaired": (
+            confidence.get(
+                "primary_target_repaired"
+            ) is True
+        ),
+        "traceback_targets": traceback_targets,
+        "changed_files": changed_files,
+    }
+
+
+def get_repair_history(
+    mission_id: int,
+) -> list[dict[str, Any]]:
+    """
+    Return structured Builder repair history for one mission.
+    """
+    ensure_repair_history_table()
+
+    conn = get_connection()
+
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                mission_id,
+                task_id,
+                task_position,
+                workspace,
+                entrypoint,
+                summary,
+                confidence_score,
+                confidence_level,
+                verified,
+                primary_target,
+                primary_target_repaired,
+                traceback_targets,
+                changed_files,
+                repair_evidence,
+                final_execution,
+                confidence_evidence,
+                created_at
+            FROM mission_repair_history
+            WHERE mission_id = ?
+            ORDER BY id ASC
+            """,
+            (mission_id,),
+        ).fetchall()
+
+    finally:
+        conn.close()
+
+    history = []
+
+    for row in rows:
+        history.append(
+            {
+                "id": row["id"],
+                "mission_id": row["mission_id"],
+                "task_id": row["task_id"],
+                "task_position": row[
+                    "task_position"
+                ],
+                "workspace": row["workspace"],
+                "entrypoint": row["entrypoint"],
+                "summary": row["summary"],
+                "confidence_score": row[
+                    "confidence_score"
+                ],
+                "confidence_level": row[
+                    "confidence_level"
+                ],
+                "verified": bool(row["verified"]),
+                "primary_target": row[
+                    "primary_target"
+                ],
+                "primary_target_repaired": bool(
+                    row[
+                        "primary_target_repaired"
+                    ]
+                ),
+                "traceback_targets": json.loads(
+                    row["traceback_targets"]
+                    or "[]"
+                ),
+                "changed_files": json.loads(
+                    row["changed_files"]
+                    or "[]"
+                ),
+                "repair_evidence": json.loads(
+                    row["repair_evidence"]
+                    or "{}"
+                ),
+                "final_execution": json.loads(
+                    row["final_execution"]
+                    or "{}"
+                ),
+                "confidence": json.loads(
+                    row["confidence_evidence"]
+                    or "{}"
+                ),
+                "created_at": row["created_at"],
+            }
+        )
+
+    return history
+
+
 def _repair_confidence(
     repair_result: dict[str, Any] | None,
     final_execution: dict[str, Any],
@@ -704,6 +1013,36 @@ def _complete_workspace_execution_task(
             repair_result,
             evidence,
         )
+
+        repair_history = None
+
+        if (
+            repair_result
+            and repair_confidence
+            and evidence.get("verified") is True
+            and evidence.get("exit_code") == 0
+        ):
+            repair_history = record_repair_history(
+                mission_id,
+                int(task["id"]),
+                int(task["position"]),
+                repair_result,
+                evidence,
+                repair_confidence,
+            )
+
+            log_event(
+                mission_id,
+                "Executor",
+                "repair_history",
+                (
+                    f"Recorded verified Builder repair history "
+                    f"{repair_history['id']} for task "
+                    f"{task['position']} with confidence "
+                    f"{repair_confidence['level']} "
+                    f"{repair_confidence['score']}"
+                ),
+            )
 
         result = (
             "WORKSPACE EXECUTION: VERIFIED\n\n"
@@ -1205,6 +1544,37 @@ def _complete_builder_task(
             auto_repair,
             auto_execution or {},
         )
+
+        auto_repair_history = None
+
+        if (
+            auto_repair
+            and auto_repair_confidence
+            and auto_execution
+            and auto_execution.get("verified") is True
+            and auto_execution.get("exit_code") == 0
+        ):
+            auto_repair_history = record_repair_history(
+                mission_id,
+                int(task["id"]),
+                int(task["position"]),
+                auto_repair,
+                auto_execution,
+                auto_repair_confidence,
+            )
+
+            log_event(
+                mission_id,
+                "Executor",
+                "repair_history",
+                (
+                    f"Recorded verified automatic Builder repair "
+                    f"history {auto_repair_history['id']} for task "
+                    f"{task['position']} with confidence "
+                    f"{auto_repair_confidence['level']} "
+                    f"{auto_repair_confidence['score']}"
+                ),
+            )
 
         result = (
             "BUILDER AGENT: COMPLETED\n\n"
