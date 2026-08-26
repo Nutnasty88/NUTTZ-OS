@@ -1058,29 +1058,38 @@ def _rollback_failed_builder_repair(
                 f"{relative_path}: {rollback_error}"
             )
 
-    if rollback_errors:
-        raise RuntimeError(
-            "Post-repair execution failed and Builder rollback was "
-            "incomplete. Rollback errors: "
-            + "; ".join(rollback_errors)
-        )
+    rollback_complete = not rollback_errors
 
-    log_event(
-        mission_id,
-        "Workspace Executor",
-        "repair_execution_rollback",
-        (
-            f"Restored {len(restored_files)} pre-repair file(s) "
-            f"after repaired execution failed for task "
-            f"{task_position}"
-        ),
-    )
+    if rollback_complete:
+        log_event(
+            mission_id,
+            "Workspace Executor",
+            "repair_execution_rollback",
+            (
+                f"Restored {len(restored_files)} pre-repair file(s) "
+                f"after repaired execution failed for task "
+                f"{task_position}"
+            ),
+        )
+    else:
+        log_event(
+            mission_id,
+            "Workspace Executor",
+            "repair_execution_rollback_incomplete",
+            (
+                f"Builder rollback was incomplete for task "
+                f"{task_position}. Restored "
+                f"{len(restored_files)} file(s); "
+                f"{len(rollback_errors)} rollback error(s)."
+            ),
+        )
 
     return {
         "workspace": workspace_name,
-        "restored": True,
+        "restored": rollback_complete,
         "file_count": len(restored_files),
         "files": restored_files,
+        "errors": rollback_errors,
     }
 
 
@@ -1172,6 +1181,12 @@ def _complete_workspace_execution_task(
                     evidence,
                 )
 
+                failed_outcome = (
+                    "failed_rolled_back"
+                    if rollback_result.get("restored") is True
+                    else "failed_rollback_incomplete"
+                )
+
                 failed_history = record_repair_history(
                     mission_id,
                     int(task["id"]),
@@ -1179,7 +1194,7 @@ def _complete_workspace_execution_task(
                     repair_result,
                     evidence,
                     failed_confidence,
-                    outcome="failed_rolled_back",
+                    outcome=failed_outcome,
                     rollback_evidence=rollback_result,
                 )
 
@@ -1188,9 +1203,10 @@ def _complete_workspace_execution_task(
                     "Executor",
                     "repair_history",
                     (
-                        "Recorded failed rolled-back Builder repair "
-                        f"history {failed_history['id']} for task "
-                        f"{task['position']}"
+                        f"Recorded Builder repair failure history "
+                        f"{failed_history['id']} for task "
+                        f"{task['position']} with outcome "
+                        f"{failed_outcome}"
                     ),
                 )
 
@@ -1729,6 +1745,12 @@ def _complete_builder_task(
                             auto_execution,
                         )
 
+                        failed_outcome = (
+                            "failed_rolled_back"
+                            if rollback_result.get("restored") is True
+                            else "failed_rollback_incomplete"
+                        )
+
                         failed_history = record_repair_history(
                             mission_id,
                             int(task["id"]),
@@ -1736,7 +1758,7 @@ def _complete_builder_task(
                             auto_repair,
                             auto_execution,
                             failed_confidence,
-                            outcome="failed_rolled_back",
+                            outcome=failed_outcome,
                             rollback_evidence=rollback_result,
                         )
 
@@ -1745,10 +1767,10 @@ def _complete_builder_task(
                             "Executor",
                             "repair_history",
                             (
-                                "Recorded failed rolled-back automatic "
-                                "Builder repair history "
-                                f"{failed_history['id']} for task "
-                                f"{task['position']}"
+                                "Recorded automatic Builder repair "
+                                f"failure history {failed_history['id']} "
+                                f"for task {task['position']} with "
+                                f"outcome {failed_outcome}"
                             ),
                         )
 
