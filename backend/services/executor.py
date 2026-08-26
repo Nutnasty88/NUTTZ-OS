@@ -738,7 +738,9 @@ def record_repair_history(
                 (history_id,),
             ).fetchone()
 
-            return dict(row)
+            result = dict(row)
+            result["created"] = False
+            return result
 
         cursor = conn.execute(
             """
@@ -824,6 +826,7 @@ def record_repair_history(
 
     return {
         "id": history_id,
+        "created": True,
         "mission_id": mission_id,
         "task_id": task_id,
         "task_position": task_position,
@@ -1343,17 +1346,18 @@ def _complete_workspace_execution_task(
                     rollback_evidence=rollback_result,
                 )
 
-                log_event(
-                    mission_id,
-                    "Executor",
-                    "repair_history",
-                    (
-                        f"Recorded Builder repair failure history "
-                        f"{failed_history['id']} for task "
-                        f"{task['position']} with outcome "
-                        f"{failed_outcome}"
-                    ),
-                )
+                if failed_history.get("created") is True:
+                    log_event(
+                        mission_id,
+                        "Executor",
+                        "repair_history",
+                        (
+                            f"Recorded Builder repair failure history "
+                            f"{failed_history['id']} for task "
+                            f"{task['position']} with outcome "
+                            f"{failed_outcome}"
+                        ),
+                    )
 
             raise RuntimeError(
                 "Workspace artifact failed execution after one "
@@ -1422,18 +1426,19 @@ def _complete_workspace_execution_task(
                 repair_confidence,
             )
 
-            log_event(
-                mission_id,
-                "Executor",
-                "repair_history",
-                (
-                    f"Recorded verified Builder repair history "
-                    f"{repair_history['id']} for task "
-                    f"{task['position']} with confidence "
-                    f"{repair_confidence['level']} "
-                    f"{repair_confidence['score']}"
-                ),
-            )
+            if repair_history.get("created") is True:
+                log_event(
+                    mission_id,
+                    "Executor",
+                    "repair_history",
+                    (
+                        f"Recorded verified Builder repair history "
+                        f"{repair_history['id']} for task "
+                        f"{task['position']} with confidence "
+                        f"{repair_confidence['level']} "
+                        f"{repair_confidence['score']}"
+                    ),
+                )
 
         result = (
             "WORKSPACE EXECUTION: VERIFIED\n\n"
@@ -1907,17 +1912,18 @@ def _complete_builder_task(
                             rollback_evidence=rollback_result,
                         )
 
-                        log_event(
-                            mission_id,
-                            "Executor",
-                            "repair_history",
-                            (
-                                "Recorded automatic Builder repair "
-                                f"failure history {failed_history['id']} "
-                                f"for task {task['position']} with "
-                                f"outcome {failed_outcome}"
-                            ),
-                        )
+                        if failed_history.get("created") is True:
+                            log_event(
+                                mission_id,
+                                "Executor",
+                                "repair_history",
+                                (
+                                    "Recorded automatic Builder repair "
+                                    f"failure history {failed_history['id']} "
+                                    f"for task {task['position']} with "
+                                    f"outcome {failed_outcome}"
+                                ),
+                            )
 
                     raise RuntimeError(
                         "Automatic Builder project verification failed "
@@ -2003,18 +2009,19 @@ def _complete_builder_task(
                 auto_repair_confidence,
             )
 
-            log_event(
-                mission_id,
-                "Executor",
-                "repair_history",
-                (
-                    f"Recorded verified automatic Builder repair "
-                    f"history {auto_repair_history['id']} for task "
-                    f"{task['position']} with confidence "
-                    f"{auto_repair_confidence['level']} "
-                    f"{auto_repair_confidence['score']}"
-                ),
-            )
+            if auto_repair_history.get("created") is True:
+                log_event(
+                    mission_id,
+                    "Executor",
+                    "repair_history",
+                    (
+                        f"Recorded verified automatic Builder repair "
+                        f"history {auto_repair_history['id']} for task "
+                        f"{task['position']} with confidence "
+                        f"{auto_repair_confidence['level']} "
+                        f"{auto_repair_confidence['score']}"
+                    ),
+                )
 
         result = (
             "BUILDER AGENT: COMPLETED\n\n"
