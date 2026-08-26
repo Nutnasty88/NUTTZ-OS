@@ -348,10 +348,12 @@ def _latest_builder_entrypoint(
         evidence_text = result.split(
             marker,
             1,
-        )[1].strip()
+        )[1].lstrip()
 
         try:
-            evidence = json.loads(evidence_text)
+            evidence, _ = json.JSONDecoder().raw_decode(
+                evidence_text
+            )
         except json.JSONDecodeError:
             continue
 
