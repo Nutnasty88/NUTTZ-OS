@@ -150,6 +150,26 @@ def sync_tasks(mission_id: int, plan: str) -> list[dict[str, Any]]:
                 "before task synchronization."
             )
 
+        repair_history = conn.execute(
+            """
+            SELECT id, task_id, task_position
+            FROM mission_repair_history
+            WHERE mission_id=?
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if repair_history is not None:
+            raise RuntimeError(
+                f"Mission {mission_id} has durable Builder repair history "
+                f"(history {repair_history['id']} for task "
+                f"{repair_history['task_position']}). "
+                "Task synchronization is blocked to preserve task identity "
+                "and verified repair evidence."
+            )
+
         conn.execute(
             """
             DELETE FROM mission_tasks
