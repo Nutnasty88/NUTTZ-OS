@@ -434,6 +434,383 @@ function RepairConfidenceDetails({
 }
 
 
+function RepairHistoryPanel({
+  missionId,
+}) {
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const loadHistory = useCallback(async () => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/missions/${missionId}/repair-history`,
+      );
+
+      if (!response.ok) {
+        const body = await response.text();
+
+        throw new Error(
+          body ||
+            `Repair history request failed: ${response.status}`,
+        );
+      }
+
+      const data = await response.json();
+
+      setHistory(
+        Array.isArray(data.repair_history)
+          ? data.repair_history
+          : [],
+      );
+
+      setLoaded(true);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load repair history.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [missionId]);
+
+  const toggleHistory = async () => {
+    const nextOpen = !open;
+
+    setOpen(nextOpen);
+
+    if (nextOpen && !loaded && !loading) {
+      await loadHistory();
+    }
+  };
+
+  return (
+    <div
+      style={{
+        marginBottom: "14px",
+        padding: "12px",
+        background: "rgba(20, 15, 8, 0.88)",
+        border: "1px solid rgba(214, 163, 61, 0.55)",
+        borderRadius: "7px",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "10px",
+        }}
+      >
+        <div>
+          <strong
+            style={{
+              color: "#f0bd59",
+              fontSize: "12px",
+              textTransform: "uppercase",
+              letterSpacing: "0.8px",
+            }}
+          >
+            Builder Repair History
+          </strong>
+
+          <div
+            style={{
+              marginTop: "3px",
+              color: "#a99d87",
+              fontSize: "11px",
+            }}
+          >
+            {loaded
+              ? `${history.length} verified repair${
+                  history.length === 1 ? "" : "s"
+                } recorded`
+              : "Durable verified Builder repair records"}
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: "7px",
+            flexWrap: "wrap",
+          }}
+        >
+          {open && (
+            <button
+              type="button"
+              disabled={loading}
+              onClick={loadHistory}
+              style={{
+                padding: "6px 10px",
+                background: "#344052",
+                color: "#dce8f4",
+                border: "none",
+                borderRadius: "4px",
+                cursor: loading ? "wait" : "pointer",
+                opacity: loading ? 0.6 : 1,
+              }}
+            >
+              {loading ? "Loading..." : "Refresh"}
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={toggleHistory}
+            style={{
+              padding: "6px 11px",
+              background: open
+                ? "#6f5220"
+                : "#a7741c",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor: "pointer",
+            }}
+          >
+            {open ? "Hide History" : "View History"}
+          </button>
+        </div>
+      </div>
+
+      {open && error && (
+        <div
+          style={{
+            marginTop: "10px",
+            padding: "9px",
+            color: "#ff8c8c",
+            background: "rgba(90, 20, 20, 0.28)",
+            borderRadius: "5px",
+            fontSize: "12px",
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      {open && loading && !loaded && (
+        <div
+          style={{
+            marginTop: "11px",
+            color: "#c8bda8",
+            fontSize: "12px",
+          }}
+        >
+          Loading Builder repair history...
+        </div>
+      )}
+
+      {open &&
+        loaded &&
+        !loading &&
+        history.length === 0 && (
+          <div
+            style={{
+              marginTop: "11px",
+              color: "#9f927d",
+              fontSize: "12px",
+            }}
+          >
+            No verified Builder repairs have been recorded
+            for this mission.
+          </div>
+        )}
+
+      {open && history.length > 0 && (
+        <div
+          style={{
+            marginTop: "12px",
+            display: "grid",
+            gap: "9px",
+          }}
+        >
+          {history.map((repair, index) => {
+            const confidence =
+              repair.confidence || {};
+
+            const changedFiles = Array.isArray(
+              repair.changed_files,
+            )
+              ? repair.changed_files
+              : [];
+
+            const tracebackTargets = Array.isArray(
+              repair.traceback_targets,
+            )
+              ? repair.traceback_targets
+              : [];
+
+            return (
+              <div
+                key={repair.id}
+                style={{
+                  padding: "11px",
+                  background: "rgba(8, 13, 20, 0.88)",
+                  border:
+                    "1px solid rgba(214, 163, 61, 0.28)",
+                  borderRadius: "6px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    gap: "8px",
+                  }}
+                >
+                  <strong
+                    style={{
+                      color: "#f1d08b",
+                      fontSize: "12px",
+                    }}
+                  >
+                    Repair #{index + 1}
+                  </strong>
+
+                  <span
+                    style={{
+                      color:
+                        repair.confidence_level === "High"
+                          ? "#4de3a5"
+                          : repair.confidence_level === "Medium"
+                            ? "#ffd166"
+                            : "#ff8c8c",
+                      fontSize: "11px",
+                      fontWeight: "700",
+                    }}
+                  >
+                    {repair.confidence_level || "Unknown"}{" "}
+                    {repair.confidence_score ?? 0}%
+                  </span>
+                </div>
+
+                {repair.summary && (
+                  <div
+                    style={{
+                      marginTop: "8px",
+                      color: "#dce8f4",
+                      fontSize: "12px",
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {repair.summary}
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    marginTop: "9px",
+                    display: "grid",
+                    gap: "5px",
+                    color: "#aebccc",
+                    fontSize: "11px",
+                  }}
+                >
+                  <div>
+                    <strong>Task:</strong>{" "}
+                    {repair.task_position}
+                  </div>
+
+                  <div>
+                    <strong>Entrypoint:</strong>{" "}
+                    {repair.entrypoint || "Unknown"}
+                  </div>
+
+                  <div>
+                    <strong>Primary target:</strong>{" "}
+                    {repair.primary_target || "Unknown"}
+                  </div>
+
+                  <div>
+                    <strong>Primary target repaired:</strong>{" "}
+                    {repair.primary_target_repaired
+                      ? "Yes"
+                      : "No"}
+                  </div>
+
+                  <div>
+                    <strong>Changed files:</strong>{" "}
+                    {changedFiles.length > 0
+                      ? changedFiles.join(", ")
+                      : "None recorded"}
+                  </div>
+
+                  <div>
+                    <strong>Traceback targets:</strong>{" "}
+                    {tracebackTargets.length > 0
+                      ? tracebackTargets.join(" → ")
+                      : "None recorded"}
+                  </div>
+
+                  <div>
+                    <strong>Verified:</strong>{" "}
+                    {repair.verified ? "Yes" : "No"}
+                  </div>
+
+                  {repair.created_at && (
+                    <div>
+                      <strong>Recorded:</strong>{" "}
+                      {repair.created_at}
+                    </div>
+                  )}
+                </div>
+
+                {Array.isArray(confidence.reasons) &&
+                  confidence.reasons.length > 0 && (
+                    <div
+                      style={{
+                        marginTop: "9px",
+                        paddingTop: "8px",
+                        borderTop:
+                          "1px solid rgba(214, 163, 61, 0.18)",
+                        color: "#bfcbd7",
+                        fontSize: "11px",
+                      }}
+                    >
+                      <strong>Confidence reasons:</strong>
+
+                      <ul
+                        style={{
+                          margin: "5px 0 0",
+                          paddingLeft: "18px",
+                        }}
+                      >
+                        {confidence.reasons.map(
+                          (reason, reasonIndex) => (
+                            <li
+                              key={reasonIndex}
+                              style={{
+                                marginBottom: "3px",
+                              }}
+                            >
+                              {String(reason)}
+                            </li>
+                          ),
+                        )}
+                      </ul>
+                    </div>
+                  )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function parseWorkspaceExecutionResult(result) {
   if (
     typeof result !== "string" ||
@@ -2765,6 +3142,10 @@ export default function MissionQueue() {
                     )}
                   </div>
                 )}
+
+                <RepairHistoryPanel
+                  missionId={mission.id}
+                />
 
                 {tasks.length === 0 && (
                   <div
