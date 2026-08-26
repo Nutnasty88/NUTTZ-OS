@@ -2622,6 +2622,97 @@ def reset_blocked_task(
     }
 
 
+def recover_interrupted_tasks() -> dict[str, Any]:
+    """
+    Mark persisted Running tasks as Interrupted.
+
+    A Running task can survive a backend crash because task execution
+    state is persisted while the Autonomous Worker thread is not.
+
+    Recovery is deliberately conservative. Interrupted tasks are not
+    automatically retried because Builder or execution tasks may have
+    produced side effects before the process stopped.
+    """
+    ensure_task_table()
+
+    conn = get_connection()
+
+    try:
+        running_tasks = conn.execute(
+            """
+            SELECT
+                id,
+                mission_id,
+                position,
+                title,
+                started_at
+            FROM mission_tasks
+            WHERE status='Running'
+            ORDER BY mission_id, position
+            """
+        ).fetchall()
+
+        recovered = []
+
+        for task in running_tasks:
+            cursor = conn.execute(
+                """
+                UPDATE mission_tasks
+                SET status='Interrupted'
+                WHERE id=?
+                  AND status='Running'
+                """,
+                (task["id"],),
+            )
+
+            if cursor.rowcount != 1:
+                continue
+
+            conn.execute(
+                """
+                UPDATE missions
+                SET
+                    status='Interrupted',
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+                  AND status='Running'
+                """,
+                (task["mission_id"],),
+            )
+
+            recovered.append(
+                {
+                    "task_id": task["id"],
+                    "mission_id": task["mission_id"],
+                    "position": task["position"],
+                    "title": task["title"],
+                    "started_at": task["started_at"],
+                }
+            )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+    for task in recovered:
+        log_event(
+            task["mission_id"],
+            "Recovery",
+            "interrupted",
+            (
+                f'Task {task["position"]} was marked Interrupted '
+                "after persisted Running state was found without "
+                "a surviving worker process."
+            ),
+        )
+
+    return {
+        "recovered_count": len(recovered),
+        "tasks": recovered,
+    }
+
+
 def execute_next_task(mission_id: int) -> dict[str, Any]:
     ensure_task_table()
 
