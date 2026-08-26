@@ -20,6 +20,10 @@ def get_connection():
         "PRAGMA busy_timeout = 5000"
     )
 
+    conn.execute(
+        "PRAGMA journal_mode = WAL"
+    )
+
     return conn
 
 
