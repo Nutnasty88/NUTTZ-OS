@@ -161,13 +161,17 @@ def _parse_builder_response(
 
 def _workspace_context(
     workspace_name: str,
+    priority_paths: list[str] | None = None,
 ) -> str:
     """
     Build bounded read-only project context for Builder.
 
-    Builder can see existing UTF-8 project files so later tasks can
-    extend a multi-file project coherently. NUTTZ-generated manifests
-    are excluded because Builder must never author or modify them.
+    Priority paths are included first when they exist in the workspace.
+    This lets repair mode reserve context for traceback-linked files
+    before the normal file-count and byte budgets are consumed.
+
+    NUTTZ-generated manifests are excluded because Builder must never
+    author or modify them.
     """
     listing = list_workspace_files(workspace_name)
 
@@ -176,13 +180,60 @@ def _workspace_context(
     if not files:
         return "Workspace currently contains no files."
 
+    path_to_item = {
+        item.get("path"): item
+        for item in files
+        if (
+            isinstance(item, dict)
+            and isinstance(item.get("path"), str)
+            and item.get("path")
+        )
+    }
+
+    ordered_files = []
+    included_paths = set()
+
+    for relative_path in priority_paths or []:
+        if (
+            not isinstance(relative_path, str)
+            or not relative_path
+            or relative_path == "nuttz-project.json"
+            or relative_path in included_paths
+        ):
+            continue
+
+        item = path_to_item.get(relative_path)
+
+        if item is None:
+            continue
+
+        ordered_files.append(item)
+        included_paths.add(relative_path)
+
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+
+        relative_path = item.get("path")
+
+        if (
+            not isinstance(relative_path, str)
+            or not relative_path
+            or relative_path == "nuttz-project.json"
+            or relative_path in included_paths
+        ):
+            continue
+
+        ordered_files.append(item)
+        included_paths.add(relative_path)
+
     sections = [
         "Existing workspace project files:",
     ]
 
     context_bytes = 0
 
-    for item in files[:MAX_BUILDER_FILES]:
+    for item in ordered_files[:MAX_BUILDER_FILES]:
         if not isinstance(item, dict):
             continue
 
@@ -654,8 +705,18 @@ def repair_artifact(
             "workspace file."
         )
 
+    context_priority_paths = []
+
+    for relative_path in reversed(traceback_targets):
+        if relative_path not in context_priority_paths:
+            context_priority_paths.append(relative_path)
+
+    if artifact_path not in context_priority_paths:
+        context_priority_paths.append(artifact_path)
+
     workspace_context = _workspace_context(
         workspace_name,
+        priority_paths=context_priority_paths,
     )
 
     log_event(
