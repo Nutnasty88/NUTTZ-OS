@@ -594,6 +594,49 @@ def record_repair_history(
         and final_execution.get("exit_code") == 0
     )
 
+    rollback_restored = (
+        rollback_evidence.get("restored") is True
+    )
+
+    if outcome == "verified":
+        if not verified:
+            raise ValueError(
+                "Verified Builder repair history requires "
+                "successful final execution evidence."
+            )
+
+        if rollback_evidence:
+            raise ValueError(
+                "Verified Builder repair history must not "
+                "contain rollback evidence."
+            )
+
+    elif outcome == "failed_rolled_back":
+        if verified:
+            raise ValueError(
+                "Failed Builder repair history cannot contain "
+                "successful final execution evidence."
+            )
+
+        if not rollback_restored:
+            raise ValueError(
+                "failed_rolled_back requires rollback evidence "
+                "with restored=true."
+            )
+
+    elif outcome == "failed_rollback_incomplete":
+        if verified:
+            raise ValueError(
+                "Incomplete rollback history cannot contain "
+                "successful final execution evidence."
+            )
+
+        if rollback_evidence.get("restored") is not False:
+            raise ValueError(
+                "failed_rollback_incomplete requires rollback "
+                "evidence with restored=false."
+            )
+
     conn = get_connection()
 
     try:
