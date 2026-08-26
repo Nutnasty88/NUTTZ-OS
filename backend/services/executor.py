@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 from typing import Any
@@ -504,10 +505,68 @@ def ensure_repair_history_table() -> None:
                 """
             )
 
+        if "fingerprint" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE mission_repair_history
+                ADD COLUMN fingerprint TEXT
+                """
+            )
+
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS
+            idx_mission_repair_history_fingerprint
+            ON mission_repair_history(fingerprint)
+            WHERE fingerprint IS NOT NULL
+            """
+        )
+
         conn.commit()
 
     finally:
         conn.close()
+
+
+def _repair_history_fingerprint(
+    mission_id: int,
+    task_id: int,
+    task_position: int,
+    workspace: str,
+    entrypoint: str,
+    outcome: str,
+    repair_evidence: dict[str, Any],
+    final_execution: dict[str, Any],
+    rollback_evidence: dict[str, Any],
+) -> str:
+    """
+    Build a deterministic identity for one Builder repair event.
+
+    Canonical JSON makes logically identical evidence produce the
+    same fingerprint regardless of dictionary insertion order.
+    """
+    payload = {
+        "mission_id": mission_id,
+        "task_id": task_id,
+        "task_position": task_position,
+        "workspace": workspace,
+        "entrypoint": entrypoint,
+        "outcome": outcome,
+        "repair_evidence": repair_evidence,
+        "final_execution": final_execution,
+        "rollback_evidence": rollback_evidence,
+    }
+
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+    return hashlib.sha256(
+        canonical.encode("utf-8")
+    ).hexdigest()
 
 
 def record_repair_history(
@@ -637,9 +696,50 @@ def record_repair_history(
                 "evidence with restored=false."
             )
 
+    fingerprint = _repair_history_fingerprint(
+        mission_id=mission_id,
+        task_id=task_id,
+        task_position=task_position,
+        workspace=str(workspace),
+        entrypoint=str(entrypoint),
+        outcome=outcome,
+        repair_evidence=repair_evidence,
+        final_execution=final_execution,
+        rollback_evidence=rollback_evidence,
+    )
+
     conn = get_connection()
 
     try:
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM mission_repair_history
+            WHERE fingerprint = ?
+            LIMIT 1
+            """,
+            (fingerprint,),
+        ).fetchone()
+
+        if existing is not None:
+            history_id = int(existing["id"])
+
+            print(
+                "Builder repair history duplicate suppressed:",
+                history_id,
+            )
+
+            row = conn.execute(
+                """
+                SELECT *
+                FROM mission_repair_history
+                WHERE id = ?
+                """,
+                (history_id,),
+            ).fetchone()
+
+            return dict(row)
+
         cursor = conn.execute(
             """
             INSERT INTO mission_repair_history (
@@ -660,11 +760,12 @@ def record_repair_history(
                 final_execution,
                 confidence_evidence,
                 outcome,
-                rollback_evidence
+                rollback_evidence,
+                fingerprint
             )
             VALUES (
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             """,
             (
@@ -710,6 +811,7 @@ def record_repair_history(
                     rollback_evidence,
                     sort_keys=True,
                 ),
+                fingerprint,
             ),
         )
 
