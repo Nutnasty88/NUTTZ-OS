@@ -617,6 +617,24 @@ def repair_artifact(
     )
 
     listing = list_workspace_files(workspace_name)
+
+    if listing.get("truncated") is True:
+        log_event(
+            mission_id,
+            "Builder",
+            "repair_blocked",
+            (
+                f"Builder blocked project repair for task "
+                f"{task_position} because workspace file listing "
+                "is truncated."
+            ),
+        )
+
+        raise RuntimeError(
+            "Builder project repair requires a complete workspace "
+            "file listing; the workspace listing is truncated."
+        )
+
     listed_files = listing.get("files", [])
 
     existing_python_paths = {
