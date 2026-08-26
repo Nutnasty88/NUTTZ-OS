@@ -1,13 +1,202 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.database.database import get_connection
 from app.services.events import log_event
 from app.services.reporter import create_deliverable
 from services.executor import execute_next_task, get_tasks
+
+
+WORKER_LEASE_SECONDS = 30
+
+
+def ensure_worker_lease_table() -> None:
+    conn = get_connection()
+
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mission_worker_leases (
+                mission_id INTEGER PRIMARY KEY,
+                owner_token TEXT NOT NULL,
+                acquired_at TEXT NOT NULL,
+                heartbeat_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                FOREIGN KEY (mission_id)
+                    REFERENCES missions(id)
+                    ON DELETE CASCADE
+            )
+            """
+        )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _lease_timestamp(value: datetime) -> str:
+    return value.isoformat(timespec="microseconds")
+
+
+def acquire_worker_lease(
+    mission_id: int,
+    lease_seconds: int = WORKER_LEASE_SECONDS,
+) -> dict[str, Any]:
+    ensure_worker_lease_table()
+
+    owner_token = uuid.uuid4().hex
+    now = _utc_now()
+    expires_at = now + timedelta(seconds=lease_seconds)
+
+    conn = get_connection()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        existing = conn.execute(
+            """
+            SELECT
+                mission_id,
+                owner_token,
+                acquired_at,
+                heartbeat_at,
+                expires_at
+            FROM mission_worker_leases
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if existing is not None:
+            existing_expiry = datetime.fromisoformat(
+                existing["expires_at"]
+            )
+
+            if existing_expiry > now:
+                conn.rollback()
+
+                raise RuntimeError(
+                    f"Mission {mission_id} already has an "
+                    "active worker lease."
+                )
+
+            conn.execute(
+                """
+                DELETE FROM mission_worker_leases
+                WHERE mission_id=?
+                """,
+                (mission_id,),
+            )
+
+        conn.execute(
+            """
+            INSERT INTO mission_worker_leases (
+                mission_id,
+                owner_token,
+                acquired_at,
+                heartbeat_at,
+                expires_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                mission_id,
+                owner_token,
+                _lease_timestamp(now),
+                _lease_timestamp(now),
+                _lease_timestamp(expires_at),
+            ),
+        )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+    return {
+        "mission_id": mission_id,
+        "owner_token": owner_token,
+        "acquired_at": _lease_timestamp(now),
+        "heartbeat_at": _lease_timestamp(now),
+        "expires_at": _lease_timestamp(expires_at),
+    }
+
+
+def renew_worker_lease(
+    mission_id: int,
+    owner_token: str,
+    lease_seconds: int = WORKER_LEASE_SECONDS,
+) -> bool:
+    """Extend a worker lease only when the caller still owns it."""
+    ensure_worker_lease_table()
+
+    now = _utc_now()
+    expires_at = now + timedelta(seconds=lease_seconds)
+
+    conn = get_connection()
+
+    try:
+        cursor = conn.execute(
+            """
+            UPDATE mission_worker_leases
+            SET
+                heartbeat_at=?,
+                expires_at=?
+            WHERE mission_id=?
+              AND owner_token=?
+            """,
+            (
+                _lease_timestamp(now),
+                _lease_timestamp(expires_at),
+                mission_id,
+                owner_token,
+            ),
+        )
+
+        conn.commit()
+
+        return cursor.rowcount == 1
+
+    finally:
+        conn.close()
+
+
+def release_worker_lease(
+    mission_id: int,
+    owner_token: str,
+) -> bool:
+    ensure_worker_lease_table()
+
+    conn = get_connection()
+
+    try:
+        cursor = conn.execute(
+            """
+            DELETE FROM mission_worker_leases
+            WHERE mission_id=?
+              AND owner_token=?
+            """,
+            (
+                mission_id,
+                owner_token,
+            ),
+        )
+
+        conn.commit()
+
+        return cursor.rowcount == 1
+
+    finally:
+        conn.close()
 
 
 _state_lock = threading.RLock()
@@ -135,11 +324,48 @@ def _complete_mission(mission_id: int) -> None:
     )
 
 
-def _run_worker(mission_id: int, delay_seconds: float) -> None:
+def _run_worker(
+    mission_id: int,
+    delay_seconds: float,
+    owner_token: str,
+) -> None:
     global _worker_thread
+
+    heartbeat_stop = threading.Event()
+    lease_lost = threading.Event()
+
+    def heartbeat_worker_lease() -> None:
+        interval = max(
+            1.0,
+            WORKER_LEASE_SECONDS / 3,
+        )
+
+        while not heartbeat_stop.wait(interval):
+            try:
+                renewed = renew_worker_lease(
+                    mission_id,
+                    owner_token,
+                )
+            except Exception:
+                renewed = False
+
+            if not renewed:
+                lease_lost.set()
+                return
+
+    heartbeat_thread = threading.Thread(
+        target=heartbeat_worker_lease,
+        name=f"nuttz-worker-lease-{mission_id}",
+        daemon=True,
+    )
+    heartbeat_thread.start()
 
     try:
         while not _stop_event.is_set():
+            if lease_lost.is_set():
+                raise RuntimeError(
+                    "Autonomous Worker lost its mission lease."
+                )
             tasks = get_tasks(mission_id)
             total, completed = _count_tasks(tasks)
 
@@ -217,6 +443,12 @@ def _run_worker(mission_id: int, delay_seconds: float) -> None:
 
             execution = execute_next_task(mission_id)
 
+            if lease_lost.is_set():
+                raise RuntimeError(
+                    "Autonomous Worker lost its mission lease "
+                    "while executing the current task."
+                )
+
             if execution.get("status") == "Blocked":
                 refreshed_tasks = get_tasks(mission_id)
                 refreshed_total, refreshed_completed = _count_tasks(
@@ -270,6 +502,17 @@ def _run_worker(mission_id: int, delay_seconds: float) -> None:
         )
 
     finally:
+        heartbeat_stop.set()
+        heartbeat_thread.join(timeout=2.0)
+
+        try:
+            release_worker_lease(
+                mission_id,
+                owner_token,
+            )
+        except Exception:
+            pass
+
         with _state_lock:
             if _worker_state["status"] == "Stopping":
                 _worker_state["status"] = "Paused"
@@ -371,6 +614,9 @@ def start_worker(
 
         return _snapshot()
 
+    lease = acquire_worker_lease(mission_id)
+    owner_token = lease["owner_token"]
+
     _stop_event.clear()
 
     _update_state(
@@ -384,13 +630,25 @@ def start_worker(
         started_at=_timestamp(),
     )
 
-    _worker_thread = threading.Thread(
-        target=_run_worker,
-        args=(mission_id, delay_seconds),
-        name=f"nuttz-worker-mission-{mission_id}",
-        daemon=True,
-    )
-    _worker_thread.start()
+    try:
+        _worker_thread = threading.Thread(
+            target=_run_worker,
+            args=(
+                mission_id,
+                delay_seconds,
+                owner_token,
+            ),
+            name=f"nuttz-worker-mission-{mission_id}",
+            daemon=True,
+        )
+        _worker_thread.start()
+
+    except Exception:
+        release_worker_lease(
+            mission_id,
+            owner_token,
+        )
+        raise
 
     return _snapshot()
 
