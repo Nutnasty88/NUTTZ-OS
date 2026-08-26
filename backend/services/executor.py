@@ -2914,6 +2914,10 @@ def execute_next_task(mission_id: int) -> dict[str, Any]:
             completed = counts["completed"] or 0
 
             if total > 0 and completed == total:
+                status = "Completed"
+                progress = 100
+                message = "All mission tasks are complete."
+
                 conn.execute(
                     """
                     UPDATE missions
@@ -2926,12 +2930,21 @@ def execute_next_task(mission_id: int) -> dict[str, Any]:
                     (mission_id,),
                 )
                 conn.commit()
+            else:
+                status = "Incomplete"
+                progress = int(mission["progress"] or 0)
+                message = (
+                    "No pending tasks remain, but not all mission "
+                    "tasks are completed."
+                )
 
             return {
                 "mission_id": mission_id,
-                "status": "Completed",
-                "message": "No pending tasks remain.",
-                "progress": 100 if total > 0 else 20,
+                "status": status,
+                "message": message,
+                "progress": progress,
+                "total_tasks": total,
+                "completed_tasks": completed,
             }
 
         conn.execute(
