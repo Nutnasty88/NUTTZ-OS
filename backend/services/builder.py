@@ -828,53 +828,131 @@ NUTTZ-OS will execute the original entrypoint again afterward.
             )
 
         changed_files = []
+        written_paths = []
 
-        for file_entry in files:
-            relative_path = file_entry["path"]
-            previous = before_files[relative_path]
+        try:
+            for file_entry in files:
+                relative_path = file_entry["path"]
+                previous = before_files[relative_path]
 
-            write_result = write_workspace_file(
-                workspace_name,
-                relative_path,
-                file_entry["content"],
-            )
-
-            verification = read_workspace_file(
-                workspace_name,
-                relative_path,
-            )
-
-            if verification["sha256"] != write_result["sha256"]:
-                raise RuntimeError(
-                    "Builder project repair verification failed for "
-                    f"{relative_path}."
+                write_result = write_workspace_file(
+                    workspace_name,
+                    relative_path,
+                    file_entry["content"],
                 )
 
-            changed = (
-                verification["sha256"]
-                != previous["sha256"]
+                written_paths.append(relative_path)
+
+                verification = read_workspace_file(
+                    workspace_name,
+                    relative_path,
+                )
+
+                if (
+                    verification["sha256"]
+                    != write_result["sha256"]
+                ):
+                    raise RuntimeError(
+                        "Builder project repair verification failed "
+                        f"for {relative_path}."
+                    )
+
+                changed = (
+                    verification["sha256"]
+                    != previous["sha256"]
+                )
+
+                changed_files.append(
+                    {
+                        "path": relative_path,
+                        "created": write_result["created"],
+                        "previous_sha256": previous["sha256"],
+                        "repaired_sha256": verification["sha256"],
+                        "size_bytes": verification["size_bytes"],
+                        "changed": changed,
+                        "verified": True,
+                    }
+                )
+
+            if not any(
+                item["changed"]
+                for item in changed_files
+            ):
+                raise RuntimeError(
+                    "Builder project repair did not change any failed "
+                    "project file."
+                )
+
+        except Exception as repair_error:
+            rollback_errors = []
+
+            for relative_path in reversed(written_paths):
+                previous = before_files.get(relative_path)
+
+                if not previous:
+                    rollback_errors.append(
+                        f"{relative_path}: original snapshot missing"
+                    )
+                    continue
+
+                try:
+                    rollback_result = write_workspace_file(
+                        workspace_name,
+                        relative_path,
+                        previous["content"],
+                    )
+
+                    rollback_verification = read_workspace_file(
+                        workspace_name,
+                        relative_path,
+                    )
+
+                    if (
+                        rollback_verification["sha256"]
+                        != previous["sha256"]
+                    ):
+                        raise RuntimeError(
+                            "restored SHA256 does not match "
+                            "pre-repair snapshot"
+                        )
+
+                    if (
+                        rollback_result["sha256"]
+                        != previous["sha256"]
+                    ):
+                        raise RuntimeError(
+                            "rollback write SHA256 does not match "
+                            "pre-repair snapshot"
+                        )
+
+                except Exception as rollback_error:
+                    rollback_errors.append(
+                        f"{relative_path}: {rollback_error}"
+                    )
+
+            if rollback_errors:
+                raise RuntimeError(
+                    "Builder project repair failed and rollback was "
+                    "incomplete. Original error: "
+                    f"{repair_error}. Rollback errors: "
+                    + "; ".join(rollback_errors)
+                ) from repair_error
+
+            log_event(
+                mission_id,
+                "Builder",
+                "repair_rollback",
+                (
+                    f"Builder rolled back {len(written_paths)} "
+                    f"file(s) after failed project repair for task "
+                    f"{task_position}"
+                ),
             )
 
-            changed_files.append(
-                {
-                    "path": relative_path,
-                    "created": write_result["created"],
-                    "previous_sha256": previous["sha256"],
-                    "repaired_sha256": verification["sha256"],
-                    "size_bytes": verification["size_bytes"],
-                    "changed": changed,
-                    "verified": True,
-                }
-            )
-
-        if not any(
-            item["changed"]
-            for item in changed_files
-        ):
             raise RuntimeError(
-                "Builder project repair did not change any failed "
-                "project file."
-            )
+                "Builder project repair failed; all written files "
+                f"were rolled back successfully: {repair_error}"
+            ) from repair_error
 
         repair_evidence = {
             "type": "builder_workspace_project_repair",
