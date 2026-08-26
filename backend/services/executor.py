@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+import sqlite3
 from typing import Any
 
 from app.database.database import get_connection
@@ -742,84 +743,113 @@ def record_repair_history(
             result["created"] = False
             return result
 
-        cursor = conn.execute(
-            """
-            INSERT INTO mission_repair_history (
-                mission_id,
-                task_id,
-                task_position,
-                workspace,
-                entrypoint,
-                summary,
-                confidence_score,
-                confidence_level,
-                verified,
-                primary_target,
-                primary_target_repaired,
-                traceback_targets,
-                changed_files,
-                repair_evidence,
-                final_execution,
-                confidence_evidence,
-                outcome,
-                rollback_evidence,
-                fingerprint
-            )
-            VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?, ?, ?
-            )
-            """,
-            (
-                mission_id,
-                task_id,
-                task_position,
-                str(workspace),
-                str(entrypoint),
-                str(summary),
-                confidence.get("score"),
-                confidence.get("level"),
-                1 if verified else 0,
-                primary_target,
-                (
-                    1
-                    if confidence.get(
-                        "primary_target_repaired"
-                    ) is True
-                    else 0
-                ),
-                json.dumps(
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO mission_repair_history (
+                    mission_id,
+                    task_id,
+                    task_position,
+                    workspace,
+                    entrypoint,
+                    summary,
+                    confidence_score,
+                    confidence_level,
+                    verified,
+                    primary_target,
+                    primary_target_repaired,
                     traceback_targets,
-                    sort_keys=True,
-                ),
-                json.dumps(
                     changed_files,
-                    sort_keys=True,
-                ),
-                json.dumps(
                     repair_evidence,
-                    sort_keys=True,
-                ),
-                json.dumps(
                     final_execution,
-                    sort_keys=True,
-                ),
-                json.dumps(
-                    confidence,
-                    sort_keys=True,
-                ),
-                outcome,
-                json.dumps(
+                    confidence_evidence,
+                    outcome,
                     rollback_evidence,
-                    sort_keys=True,
+                    fingerprint
+                )
+                VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """,
+                (
+                    mission_id,
+                    task_id,
+                    task_position,
+                    str(workspace),
+                    str(entrypoint),
+                    str(summary),
+                    confidence.get("score"),
+                    confidence.get("level"),
+                    1 if verified else 0,
+                    primary_target,
+                    (
+                        1
+                        if confidence.get(
+                            "primary_target_repaired"
+                        ) is True
+                        else 0
+                    ),
+                    json.dumps(
+                        traceback_targets,
+                        sort_keys=True,
+                    ),
+                    json.dumps(
+                        changed_files,
+                        sort_keys=True,
+                    ),
+                    json.dumps(
+                        repair_evidence,
+                        sort_keys=True,
+                    ),
+                    json.dumps(
+                        final_execution,
+                        sort_keys=True,
+                    ),
+                    json.dumps(
+                        confidence,
+                        sort_keys=True,
+                    ),
+                    outcome,
+                    json.dumps(
+                        rollback_evidence,
+                        sort_keys=True,
+                    ),
+                    fingerprint,
                 ),
-                fingerprint,
-            ),
-        )
+            )
 
-        conn.commit()
+            conn.commit()
 
-        history_id = cursor.lastrowid
+            history_id = cursor.lastrowid
+
+        except sqlite3.IntegrityError:
+            conn.rollback()
+
+            row = conn.execute(
+                """
+                SELECT *
+                FROM mission_repair_history
+                WHERE fingerprint = ?
+                LIMIT 1
+                """,
+                (fingerprint,),
+            ).fetchone()
+
+            if row is None:
+                raise
+
+            history_id = int(row["id"])
+
+            print(
+                "Builder repair history concurrent "
+                "duplicate suppressed:",
+                history_id,
+            )
+
+            result = dict(row)
+            result["created"] = False
+            return result
 
     finally:
         conn.close()
