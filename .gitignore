@@ -50,3 +50,9 @@ backend/venv/
 
 # Builder Agent isolated workspaces
 builder-workspaces/
+
+# NUTTZ Core runtime process files
+.core-backend.log
+.core-backend.pid
+.core-frontend.log
+.core-frontend.pid

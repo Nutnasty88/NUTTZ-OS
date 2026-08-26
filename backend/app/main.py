@@ -14,12 +14,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers.ollama import router as ollama_router
 from app.routers.missions import router as missions_router
 from app.routers.events import router as events_router
+from services.executor import recover_interrupted_tasks
 
 app = FastAPI(
     title="NUTTZ Core API",
     description="System management API for NUTTZ OS.",
     version="0.2.0",
 )
+
+@app.on_event("startup")
+def recover_interrupted_execution_state() -> None:
+    recovery = recover_interrupted_tasks()
+
+    if recovery["recovered_count"]:
+        print(
+            "NUTTZ startup recovery:",
+            recovery["recovered_count"],
+            "interrupted task(s) detected",
+        )
+
 
 app.add_middleware(
     CORSMiddleware,
