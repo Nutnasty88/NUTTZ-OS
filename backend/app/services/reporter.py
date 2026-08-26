@@ -305,6 +305,7 @@ Rules:
             options={
                 "num_predict": 500,
             },
+            timeout=300,
         )
 
         content = _extract_content(response)

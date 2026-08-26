@@ -133,6 +133,7 @@ def chat_with_ollama(
     *,
     think: bool | None = None,
     options: dict[str, Any] | None = None,
+    timeout: float = 120,
 ):
     request_payload: dict[str, Any] = {
         "model": model,
@@ -156,7 +157,7 @@ def chat_with_ollama(
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
 
     except HTTPError as error:
