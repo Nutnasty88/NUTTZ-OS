@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from app.database.database import get_connection
 from services.executor import (
     execute_next_task,
+    get_repair_history,
     get_tasks,
     reset_blocked_task,
     sync_tasks,
@@ -264,6 +265,37 @@ def get_mission_tasks(mission_id: int):
     return {
         "mission_id": mission_id,
         "tasks": get_tasks(mission_id),
+    }
+
+
+@router.get("/{mission_id}/repair-history")
+def get_mission_repair_history(mission_id: int):
+    conn = get_connection()
+
+    try:
+        mission = conn.execute(
+            """
+            SELECT id
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if mission is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Mission {mission_id} was not found.",
+        )
+
+    history = get_repair_history(mission_id)
+
+    return {
+        "mission_id": mission_id,
+        "count": len(history),
+        "repair_history": history,
     }
 
 
