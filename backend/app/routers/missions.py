@@ -7,6 +7,7 @@ from services.executor import (
     get_repair_history,
     get_tasks,
     reset_blocked_task,
+    reset_interrupted_task,
     sync_tasks,
 )
 from services.planner import create_plan, get_plan
@@ -356,6 +357,50 @@ def reset_mission_blocked_task(mission_id: int):
         raise HTTPException(
             status_code=500,
             detail=f"Blocked-task reset failed: {error}",
+        ) from error
+
+    return {
+        "success": True,
+        "message": (
+            f'Task {reset["position"]} was reset to Pending.'
+        ),
+        "reset": reset,
+        "tasks": get_tasks(mission_id),
+    }
+
+
+@router.post("/{mission_id}/tasks/reset-interrupted")
+def reset_mission_interrupted_task(mission_id: int):
+    current_worker = get_worker_status()
+
+    if current_worker.get("thread_alive"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Pause the active Autonomous Worker before resetting "
+                "an interrupted task."
+            ),
+        )
+
+    try:
+        reset = reset_interrupted_task(mission_id)
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=404,
+            detail=str(error),
+        ) from error
+
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Interrupted-task reset failed: {error}",
         ) from error
 
     return {

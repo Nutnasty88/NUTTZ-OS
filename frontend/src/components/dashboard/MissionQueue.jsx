@@ -32,6 +32,10 @@ function taskStatusColor(status) {
     return "#ff7b7b";
   }
 
+  if (status === "Interrupted") {
+    return "#ff9f6e";
+  }
+
   return "#aab8c8";
 }
 
@@ -75,6 +79,12 @@ function missionToneStyle(tone) {
       color: "#ffd166",
       background: "rgba(255, 209, 102, 0.10)",
       border: "1px solid rgba(255, 209, 102, 0.35)",
+    },
+
+    interrupted: {
+      color: "#ff9f6e",
+      background: "rgba(255, 159, 110, 0.10)",
+      border: "1px solid rgba(255, 159, 110, 0.35)",
     },
 
     "report-error": {
@@ -130,6 +140,14 @@ function missionPolicy(status) {
       canRetryReport: false,
       terminal: false,
       tone: "blocked",
+    },
+
+    Interrupted: {
+      canRun: false,
+      canViewReport: false,
+      canRetryReport: false,
+      terminal: false,
+      tone: "interrupted",
     },
 
     "Report Error": {
@@ -2043,6 +2061,83 @@ export default function MissionQueue() {
   }
 
 
+  async function resumeInterruptedTask(missionId) {
+    setWorkerActionMissionId(missionId);
+
+    setErrors((current) => ({
+      ...current,
+      [missionId]: "",
+    }));
+
+    try {
+      const resetResponse = await fetch(
+        `${API_BASE}/missions/${missionId}/tasks/reset-interrupted`,
+        {
+          method: "POST",
+        },
+      );
+
+      const resetData = await resetResponse
+        .json()
+        .catch(() => ({}));
+
+      if (!resetResponse.ok) {
+        throw new Error(
+          resetData.detail ||
+            "Interrupted task reset failed.",
+        );
+      }
+
+      const workerResponse = await fetch(
+        `${API_BASE}/missions/${missionId}/worker/start?delay_seconds=2`,
+        {
+          method: "POST",
+        },
+      );
+
+      const workerData = await workerResponse
+        .json()
+        .catch(() => ({}));
+
+      if (!workerResponse.ok) {
+        throw new Error(
+          workerData.detail ||
+            "Task was reset, but the worker failed to resume.",
+        );
+      }
+
+      setWorker(workerData.worker || EMPTY_WORKER);
+
+      setTasksByMission((current) => ({
+        ...current,
+        [missionId]: resetData.tasks || [],
+      }));
+
+      setOpenDetailsId(null);
+      setOpenPlanId(null);
+      setOpenResearchId(null);
+      setOpenDeliverableId(null);
+      setOpenWorkspaceId(null);
+      setOpenTasksId(missionId);
+
+      await Promise.all([
+        loadMissions(),
+        loadTasks(missionId),
+      ]);
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        [missionId]: error.message,
+      }));
+
+      await loadTasks(missionId).catch(() => {});
+      await loadMissions();
+    } finally {
+      setWorkerActionMissionId(null);
+    }
+  }
+
+
   function toggleWorkspace(missionId) {
     if (openWorkspaceId === missionId) {
       setOpenWorkspaceId(null);
@@ -2534,6 +2629,41 @@ export default function MissionQueue() {
                   {isWorkerAction
                     ? "Retrying task..."
                     : "↻ Retry Blocked Task"}
+                </button>
+              )}
+
+
+              {mission.status === "Interrupted" && (
+                <button
+                  type="button"
+                  disabled={
+                    isWorkerAction ||
+                    worker.thread_alive
+                  }
+                  onClick={() =>
+                    resumeInterruptedTask(mission.id)
+                  }
+                  style={{
+                    padding: "7px 13px",
+                    background: isWorkerAction
+                      ? "#6b4d35"
+                      : "#b86632",
+                    color: "white",
+                    border: "1px solid #d88752",
+                    borderRadius: "4px",
+                    cursor: isWorkerAction
+                      ? "wait"
+                      : "pointer",
+                    opacity:
+                      isWorkerAction ||
+                      worker.thread_alive
+                        ? 0.6
+                        : 1,
+                  }}
+                >
+                  {isWorkerAction
+                    ? "Resuming task..."
+                    : "↻ Resume Interrupted Task"}
                 </button>
               )}
 

@@ -2622,6 +2622,119 @@ def reset_blocked_task(
     }
 
 
+def reset_interrupted_task(
+    mission_id: int,
+) -> dict[str, Any]:
+    """
+    Explicitly reset the first Interrupted task to Pending.
+
+    Interrupted work is never retried automatically. This function
+    provides the deliberate recovery transition after an operator has
+    chosen to resume the mission.
+    """
+    ensure_task_table()
+
+    conn = get_connection()
+
+    try:
+        mission = conn.execute(
+            """
+            SELECT id, status, progress
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if mission is None:
+            raise ValueError(
+                f"Mission {mission_id} was not found."
+            )
+
+        interrupted_task = conn.execute(
+            """
+            SELECT
+                id,
+                position,
+                title,
+                result
+            FROM mission_tasks
+            WHERE
+                mission_id=?
+                AND status='Interrupted'
+            ORDER BY position ASC
+            LIMIT 1
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if interrupted_task is None:
+            raise RuntimeError(
+                f"Mission {mission_id} has no "
+                "interrupted task to reset."
+            )
+
+        cursor = conn.execute(
+            """
+            UPDATE mission_tasks
+            SET
+                status='Pending',
+                started_at=NULL,
+                completed_at=NULL
+            WHERE id=?
+              AND status='Interrupted'
+            """,
+            (interrupted_task["id"],),
+        )
+
+        if cursor.rowcount != 1:
+            raise RuntimeError(
+                f"Interrupted task "
+                f"{interrupted_task['id']} changed "
+                "before it could be reset."
+            )
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET
+                status='Running',
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (mission_id,),
+        )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+    log_event(
+        mission_id,
+        "Recovery",
+        "reset",
+        (
+            f'Task {interrupted_task["position"]} '
+            "was explicitly reset from Interrupted "
+            "to Pending for operator-approved recovery."
+        ),
+    )
+
+    return {
+        "mission_id": mission_id,
+        "task_id": interrupted_task["id"],
+        "position": interrupted_task["position"],
+        "title": interrupted_task["title"],
+        "status": "Pending",
+        "mission_status": "Running",
+        "progress": int(mission["progress"] or 0),
+        "previous_result_preserved": bool(
+            interrupted_task["result"]
+        ),
+    }
+
+
 def recover_interrupted_tasks() -> dict[str, Any]:
     """
     Mark persisted Running tasks as Interrupted.
