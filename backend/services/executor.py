@@ -479,6 +479,31 @@ def ensure_repair_history_table() -> None:
             """
         )
 
+        columns = {
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA table_info(mission_repair_history)"
+            ).fetchall()
+        }
+
+        if "outcome" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE mission_repair_history
+                ADD COLUMN outcome TEXT NOT NULL
+                DEFAULT 'verified'
+                """
+            )
+
+        if "rollback_evidence" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE mission_repair_history
+                ADD COLUMN rollback_evidence TEXT NOT NULL
+                DEFAULT '{}'
+                """
+            )
+
         conn.commit()
 
     finally:
@@ -492,6 +517,8 @@ def record_repair_history(
     repair_result: dict[str, Any],
     final_execution: dict[str, Any],
     confidence: dict[str, Any] | None,
+    outcome: str = "verified",
+    rollback_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Persist one independently verified Builder repair attempt.
@@ -509,6 +536,20 @@ def record_repair_history(
 
     if not isinstance(confidence, dict):
         confidence = {}
+
+    if not isinstance(rollback_evidence, dict):
+        rollback_evidence = {}
+
+    allowed_outcomes = {
+        "verified",
+        "failed_rolled_back",
+        "failed_rollback_incomplete",
+    }
+
+    if outcome not in allowed_outcomes:
+        raise ValueError(
+            f"Unsupported Builder repair outcome: {outcome}"
+        )
 
     traceback_targets = confidence.get(
         "traceback_targets",
@@ -574,9 +615,14 @@ def record_repair_history(
                 changed_files,
                 repair_evidence,
                 final_execution,
-                confidence_evidence
+                confidence_evidence,
+                outcome,
+                rollback_evidence
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?
+            )
             """,
             (
                 mission_id,
@@ -616,6 +662,11 @@ def record_repair_history(
                     confidence,
                     sort_keys=True,
                 ),
+                outcome,
+                json.dumps(
+                    rollback_evidence,
+                    sort_keys=True,
+                ),
             ),
         )
 
@@ -649,6 +700,8 @@ def record_repair_history(
         ),
         "traceback_targets": traceback_targets,
         "changed_files": changed_files,
+        "outcome": outcome,
+        "rollback_evidence": rollback_evidence,
     }
 
 
@@ -683,6 +736,8 @@ def get_repair_history(
                 repair_evidence,
                 final_execution,
                 confidence_evidence,
+                outcome,
+                rollback_evidence,
                 created_at
             FROM mission_repair_history
             WHERE mission_id = ?
@@ -741,6 +796,11 @@ def get_repair_history(
                 ),
                 "confidence": json.loads(
                     row["confidence_evidence"]
+                    or "{}"
+                ),
+                "outcome": row["outcome"] or "verified",
+                "rollback_evidence": json.loads(
+                    row["rollback_evidence"]
                     or "{}"
                 ),
                 "created_at": row["created_at"],
@@ -1105,6 +1165,33 @@ def _complete_workspace_execution_task(
                     mission_id,
                     int(task["position"]),
                     repair_result,
+                )
+
+                failed_confidence = _repair_confidence(
+                    repair_result,
+                    evidence,
+                )
+
+                failed_history = record_repair_history(
+                    mission_id,
+                    int(task["id"]),
+                    int(task["position"]),
+                    repair_result,
+                    evidence,
+                    failed_confidence,
+                    outcome="failed_rolled_back",
+                    rollback_evidence=rollback_result,
+                )
+
+                log_event(
+                    mission_id,
+                    "Executor",
+                    "repair_history",
+                    (
+                        "Recorded failed rolled-back Builder repair "
+                        f"history {failed_history['id']} for task "
+                        f"{task['position']}"
+                    ),
                 )
 
             raise RuntimeError(
@@ -1635,6 +1722,34 @@ def _complete_builder_task(
                                 int(task["position"]),
                                 auto_repair,
                             )
+                        )
+
+                        failed_confidence = _repair_confidence(
+                            auto_repair,
+                            auto_execution,
+                        )
+
+                        failed_history = record_repair_history(
+                            mission_id,
+                            int(task["id"]),
+                            int(task["position"]),
+                            auto_repair,
+                            auto_execution,
+                            failed_confidence,
+                            outcome="failed_rolled_back",
+                            rollback_evidence=rollback_result,
+                        )
+
+                        log_event(
+                            mission_id,
+                            "Executor",
+                            "repair_history",
+                            (
+                                "Recorded failed rolled-back automatic "
+                                "Builder repair history "
+                                f"{failed_history['id']} for task "
+                                f"{task['position']}"
+                            ),
                         )
 
                     raise RuntimeError(

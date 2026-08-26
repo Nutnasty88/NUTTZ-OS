@@ -530,10 +530,10 @@ function RepairHistoryPanel({
             }}
           >
             {loaded
-              ? `${history.length} verified repair${
+              ? `${history.length} repair attempt${
                   history.length === 1 ? "" : "s"
                 } recorded`
-              : "Durable verified Builder repair records"}
+              : "Durable Builder repair history"}
           </div>
         </div>
 
@@ -620,7 +620,7 @@ function RepairHistoryPanel({
               fontSize: "12px",
             }}
           >
-            No verified Builder repairs have been recorded
+            No Builder repair attempts have been recorded
             for this mission.
           </div>
         )}
@@ -649,6 +649,34 @@ function RepairHistoryPanel({
               ? repair.traceback_targets
               : [];
 
+            const rollbackEvidence =
+              repair.rollback_evidence &&
+              typeof repair.rollback_evidence === "object"
+                ? repair.rollback_evidence
+                : {};
+
+            const failedRolledBack =
+              repair.outcome === "failed_rolled_back";
+
+            const rollbackRestored =
+              rollbackEvidence.restored === true;
+
+            const outcomeLabel = failedRolledBack
+              ? rollbackRestored
+                ? "Failed · Rolled Back"
+                : "Failed · Rollback Incomplete"
+              : repair.verified
+                ? "Verified Repair"
+                : "Repair Attempt";
+
+            const outcomeColor = failedRolledBack
+              ? rollbackRestored
+                ? "#ffb454"
+                : "#ff6b6b"
+              : repair.verified
+                ? "#4de3a5"
+                : "#ffd166";
+
             return (
               <div
                 key={repair.id}
@@ -669,14 +697,43 @@ function RepairHistoryPanel({
                     gap: "8px",
                   }}
                 >
-                  <strong
+                  <div
                     style={{
-                      color: "#f1d08b",
-                      fontSize: "12px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      flexWrap: "wrap",
                     }}
                   >
-                    Repair #{index + 1}
-                  </strong>
+                    <strong
+                      style={{
+                        color: "#f1d08b",
+                        fontSize: "12px",
+                      }}
+                    >
+                      Repair #{index + 1}
+                    </strong>
+
+                    <span
+                      style={{
+                        padding: "3px 7px",
+                        borderRadius: "999px",
+                        background: failedRolledBack
+                          ? "rgba(120, 62, 20, 0.42)"
+                          : repair.verified
+                            ? "rgba(20, 100, 70, 0.35)"
+                            : "rgba(110, 85, 20, 0.35)",
+                        border: `1px solid ${outcomeColor}`,
+                        color: outcomeColor,
+                        fontSize: "10px",
+                        fontWeight: "700",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.4px",
+                      }}
+                    >
+                      {outcomeLabel}
+                    </span>
+                  </div>
 
                   <span
                     style={{
@@ -757,6 +814,34 @@ function RepairHistoryPanel({
                     <strong>Verified:</strong>{" "}
                     {repair.verified ? "Yes" : "No"}
                   </div>
+
+                  <div>
+                    <strong>Outcome:</strong>{" "}
+                    <span
+                      style={{
+                        color: outcomeColor,
+                        fontWeight: "700",
+                      }}
+                    >
+                      {outcomeLabel}
+                    </span>
+                  </div>
+
+                  {failedRolledBack && (
+                    <>
+                      <div>
+                        <strong>Rollback restored:</strong>{" "}
+                        {rollbackRestored ? "Yes" : "No"}
+                      </div>
+
+                      <div>
+                        <strong>Rollback files:</strong>{" "}
+                        {Array.isArray(rollbackEvidence.files)
+                          ? rollbackEvidence.files.length
+                          : 0}
+                      </div>
+                    </>
+                  )}
 
                   {repair.created_at && (
                     <div>
