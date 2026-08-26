@@ -658,24 +658,34 @@ function RepairHistoryPanel({
             const failedRolledBack =
               repair.outcome === "failed_rolled_back";
 
+            const failedRollbackIncomplete =
+              repair.outcome ===
+              "failed_rollback_incomplete";
+
             const rollbackRestored =
               rollbackEvidence.restored === true;
 
-            const outcomeLabel = failedRolledBack
-              ? rollbackRestored
-                ? "Failed · Rolled Back"
-                : "Failed · Rollback Incomplete"
-              : repair.verified
-                ? "Verified Repair"
-                : "Repair Attempt";
+            const rollbackErrors = Array.isArray(
+              rollbackEvidence.errors,
+            )
+              ? rollbackEvidence.errors
+              : [];
 
-            const outcomeColor = failedRolledBack
-              ? rollbackRestored
+            const outcomeLabel = failedRollbackIncomplete
+              ? "Failed · Rollback Incomplete"
+              : failedRolledBack
+                ? "Failed · Rolled Back"
+                : repair.verified
+                  ? "Verified Repair"
+                  : "Repair Attempt";
+
+            const outcomeColor = failedRollbackIncomplete
+              ? "#ff6b6b"
+              : failedRolledBack
                 ? "#ffb454"
-                : "#ff6b6b"
-              : repair.verified
-                ? "#4de3a5"
-                : "#ffd166";
+                : repair.verified
+                  ? "#4de3a5"
+                  : "#ffd166";
 
             return (
               <div
@@ -718,11 +728,13 @@ function RepairHistoryPanel({
                       style={{
                         padding: "3px 7px",
                         borderRadius: "999px",
-                        background: failedRolledBack
-                          ? "rgba(120, 62, 20, 0.42)"
-                          : repair.verified
-                            ? "rgba(20, 100, 70, 0.35)"
-                            : "rgba(110, 85, 20, 0.35)",
+                        background: failedRollbackIncomplete
+                          ? "rgba(110, 20, 20, 0.46)"
+                          : failedRolledBack
+                            ? "rgba(120, 62, 20, 0.42)"
+                            : repair.verified
+                              ? "rgba(20, 100, 70, 0.35)"
+                              : "rgba(110, 85, 20, 0.35)",
                         border: `1px solid ${outcomeColor}`,
                         color: outcomeColor,
                         fontSize: "10px",
@@ -827,7 +839,8 @@ function RepairHistoryPanel({
                     </span>
                   </div>
 
-                  {failedRolledBack && (
+                  {(failedRolledBack ||
+                    failedRollbackIncomplete) && (
                     <>
                       <div>
                         <strong>Rollback restored:</strong>{" "}
@@ -840,6 +853,13 @@ function RepairHistoryPanel({
                           ? rollbackEvidence.files.length
                           : 0}
                       </div>
+
+                      {failedRollbackIncomplete && (
+                        <div>
+                          <strong>Rollback errors:</strong>{" "}
+                          {rollbackErrors.length}
+                        </div>
+                      )}
                     </>
                   )}
 
@@ -850,6 +870,52 @@ function RepairHistoryPanel({
                     </div>
                   )}
                 </div>
+
+                {failedRollbackIncomplete &&
+                  rollbackErrors.length > 0 && (
+                    <div
+                      style={{
+                        marginTop: "9px",
+                        padding: "9px",
+                        background:
+                          "rgba(95, 18, 18, 0.32)",
+                        border:
+                          "1px solid rgba(255, 107, 107, 0.28)",
+                        borderRadius: "5px",
+                        color: "#ffb3b3",
+                        fontSize: "11px",
+                      }}
+                    >
+                      <strong>
+                        Rollback failure details:
+                      </strong>
+
+                      <ul
+                        style={{
+                          margin: "5px 0 0",
+                          paddingLeft: "18px",
+                        }}
+                      >
+                        {rollbackErrors.map(
+                          (
+                            rollbackError,
+                            errorIndex,
+                          ) => (
+                            <li
+                              key={errorIndex}
+                              style={{
+                                marginBottom: "3px",
+                              }}
+                            >
+                              {String(
+                                rollbackError,
+                              )}
+                            </li>
+                          ),
+                        )}
+                      </ul>
+                    </div>
+                  )}
 
                 {Array.isArray(confidence.reasons) &&
                   confidence.reasons.length > 0 && (
