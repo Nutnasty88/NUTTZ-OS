@@ -8,6 +8,7 @@ from services.executor import (
     get_tasks,
     reset_blocked_task,
     reset_interrupted_task,
+    rollback_interrupted_task_reset,
     sync_tasks,
 )
 from services.planner import create_plan, get_plan
@@ -415,6 +416,130 @@ def reset_mission_interrupted_task(mission_id: int):
         ),
         "reset": reset,
         "tasks": get_tasks(mission_id),
+    }
+
+
+@router.post("/{mission_id}/recovery/resume")
+def resume_mission_recovery(
+    mission_id: int,
+    delay_seconds: float = 2.0,
+):
+    """
+    Perform operator-approved recovery of an interrupted mission.
+
+    Recovery is deliberately guarded before the interrupted task is
+    reset. A live local worker or active durable lease means another
+    worker may still own execution and recovery must not mutate the
+    mission.
+    """
+    current_worker = get_worker_status()
+
+    if current_worker.get("thread_alive"):
+        active_mission_id = current_worker.get("mission_id")
+
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot resume interrupted recovery while an "
+                "Autonomous Worker is active"
+                + (
+                    f" for mission {active_mission_id}."
+                    if active_mission_id is not None
+                    else "."
+                )
+            ),
+        )
+
+    lease = get_worker_lease(mission_id)
+
+    if lease and lease.get("active"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Mission {mission_id} already has an active "
+                "worker lease."
+            ),
+        )
+
+    try:
+        reset = reset_interrupted_task(mission_id)
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=404,
+            detail=str(error),
+        ) from error
+
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Interrupted recovery reset failed: {error}"
+            ),
+        ) from error
+
+    try:
+        worker = start_worker(
+            mission_id=mission_id,
+            delay_seconds=delay_seconds,
+        )
+
+    except Exception as error:
+        try:
+            rollback = rollback_interrupted_task_reset(
+                mission_id=mission_id,
+                task_id=reset["task_id"],
+            )
+
+        except Exception as rollback_error:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Autonomous Worker startup failed after the "
+                    "interrupted task was reset, and recovery "
+                    "rollback also failed. "
+                    f"Startup error: {error}. "
+                    f"Rollback error: {rollback_error}"
+                ),
+            ) from error
+
+        if isinstance(error, ValueError):
+            status_code = 400
+            failure = "the worker could not start"
+
+        elif isinstance(error, RuntimeError):
+            status_code = 409
+            failure = "worker ownership could not be acquired"
+
+        else:
+            status_code = 500
+            failure = "the Autonomous Worker failed to start"
+
+        raise HTTPException(
+            status_code=status_code,
+            detail=(
+                "Interrupted recovery was safely rolled back "
+                f"to {rollback['status']} because {failure}: "
+                f"{error}"
+            ),
+        ) from error
+
+    return {
+        "success": True,
+        "message": (
+            f"Interrupted mission {mission_id} was reset and "
+            "Autonomous Worker recovery started."
+        ),
+        "reset": reset,
+        "worker": worker,
+        "tasks": get_tasks(mission_id),
+        "lease": get_worker_lease(mission_id),
     }
 
 

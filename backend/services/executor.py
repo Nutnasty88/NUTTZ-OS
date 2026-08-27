@@ -2736,6 +2736,116 @@ def reset_interrupted_task(
     }
 
 
+def rollback_interrupted_task_reset(
+    mission_id: int,
+    task_id: int,
+) -> dict[str, Any]:
+    """
+    Restore a just-reset recovery task from Pending to Interrupted.
+
+    This rollback is intentionally narrow. It only succeeds while the
+    exact task is still Pending, preventing recovery cleanup from
+    overwriting a task that has already begun execution.
+    """
+    ensure_task_table()
+
+    conn = get_connection()
+
+    try:
+        mission = conn.execute(
+            """
+            SELECT id, progress
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if mission is None:
+            raise ValueError(
+                f"Mission {mission_id} was not found."
+            )
+
+        task = conn.execute(
+            """
+            SELECT
+                id,
+                position,
+                title,
+                status
+            FROM mission_tasks
+            WHERE
+                id=?
+                AND mission_id=?
+            """,
+            (task_id, mission_id),
+        ).fetchone()
+
+        if task is None:
+            raise ValueError(
+                f"Task {task_id} was not found for "
+                f"mission {mission_id}."
+            )
+
+        cursor = conn.execute(
+            """
+            UPDATE mission_tasks
+            SET
+                status='Interrupted',
+                started_at=NULL,
+                completed_at=NULL
+            WHERE
+                id=?
+                AND mission_id=?
+                AND status='Pending'
+            """,
+            (task_id, mission_id),
+        )
+
+        if cursor.rowcount != 1:
+            raise RuntimeError(
+                f"Recovery rollback refused because task "
+                f"{task_id} is no longer Pending."
+            )
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET
+                status='Interrupted',
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (mission_id,),
+        )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+    log_event(
+        mission_id,
+        "Recovery",
+        "rollback",
+        (
+            f'Task {task["position"]} recovery reset was rolled '
+            "back from Pending to Interrupted because worker "
+            "startup did not complete."
+        ),
+    )
+
+    return {
+        "mission_id": mission_id,
+        "task_id": task_id,
+        "position": task["position"],
+        "title": task["title"],
+        "status": "Interrupted",
+        "mission_status": "Interrupted",
+        "progress": int(mission["progress"] or 0),
+    }
+
+
 def recover_interrupted_tasks() -> dict[str, Any]:
     """
     Mark orphaned persisted Running tasks as Interrupted.
