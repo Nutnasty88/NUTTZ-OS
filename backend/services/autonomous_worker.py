@@ -135,8 +135,14 @@ def renew_worker_lease(
     mission_id: int,
     owner_token: str,
     lease_seconds: int = WORKER_LEASE_SECONDS,
-) -> bool:
-    """Extend a worker lease only when the caller still owns it."""
+) -> dict[str, Any]:
+    """
+    Renew an active worker lease owned by owner_token.
+
+    Renewal fails if the lease is missing, expired, or belongs to
+    another worker. This prevents a stale worker from resurrecting
+    ownership after another process has taken over the mission.
+    """
     ensure_worker_lease_table()
 
     now = _utc_now()
@@ -145,6 +151,48 @@ def renew_worker_lease(
     conn = get_connection()
 
     try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        lease = conn.execute(
+            """
+            SELECT
+                mission_id,
+                owner_token,
+                acquired_at,
+                heartbeat_at,
+                expires_at
+            FROM mission_worker_leases
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if lease is None:
+            conn.rollback()
+
+            raise RuntimeError(
+                f"Mission {mission_id} has no worker lease to renew."
+            )
+
+        if lease["owner_token"] != owner_token:
+            conn.rollback()
+
+            raise RuntimeError(
+                f"Mission {mission_id} worker lease is owned "
+                "by another worker."
+            )
+
+        current_expiry = datetime.fromisoformat(
+            lease["expires_at"]
+        )
+
+        if current_expiry <= now:
+            conn.rollback()
+
+            raise RuntimeError(
+                f"Mission {mission_id} worker lease has expired."
+            )
+
         cursor = conn.execute(
             """
             UPDATE mission_worker_leases
@@ -162,12 +210,26 @@ def renew_worker_lease(
             ),
         )
 
-        conn.commit()
+        if cursor.rowcount != 1:
+            conn.rollback()
 
-        return cursor.rowcount == 1
+            raise RuntimeError(
+                f"Mission {mission_id} worker lease changed "
+                "before heartbeat renewal completed."
+            )
+
+        conn.commit()
 
     finally:
         conn.close()
+
+    return {
+        "mission_id": mission_id,
+        "owner_token": owner_token,
+        "acquired_at": lease["acquired_at"],
+        "heartbeat_at": _lease_timestamp(now),
+        "expires_at": _lease_timestamp(expires_at),
+    }
 
 
 def release_worker_lease(
