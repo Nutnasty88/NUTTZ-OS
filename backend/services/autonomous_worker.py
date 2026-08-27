@@ -199,6 +199,58 @@ def release_worker_lease(
         conn.close()
 
 
+def get_worker_lease(
+    mission_id: int,
+) -> dict[str, Any] | None:
+    """
+    Return the persisted worker lease for a mission.
+
+    This is read-only observability state. The owner token is not
+    exposed because callers only need ownership/liveness metadata.
+    """
+    ensure_worker_lease_table()
+
+    conn = get_connection()
+
+    try:
+        lease = conn.execute(
+            """
+            SELECT
+                mission_id,
+                acquired_at,
+                heartbeat_at,
+                expires_at
+            FROM mission_worker_leases
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+    finally:
+        conn.close()
+
+    if lease is None:
+        return None
+
+    now = _utc_now()
+
+    try:
+        expires_at = datetime.fromisoformat(
+            lease["expires_at"]
+        )
+        active = expires_at > now
+    except (TypeError, ValueError):
+        active = False
+
+    return {
+        "mission_id": lease["mission_id"],
+        "active": active,
+        "acquired_at": lease["acquired_at"],
+        "heartbeat_at": lease["heartbeat_at"],
+        "expires_at": lease["expires_at"],
+    }
+
+
 _state_lock = threading.RLock()
 _stop_event = threading.Event()
 _worker_thread: threading.Thread | None = None

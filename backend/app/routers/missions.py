@@ -13,7 +13,12 @@ from services.executor import (
 from services.planner import create_plan, get_plan
 from app.services.researcher import get_research_report, research
 from app.services.reporter import create_deliverable, get_deliverable
-from services.autonomous_worker import get_worker_status, pause_worker, start_worker
+from services.autonomous_worker import (
+    get_worker_lease,
+    get_worker_status,
+    pause_worker,
+    start_worker,
+)
 from services.workspace_executor import (
     WorkspaceExecutionError,
     launch_verified_project,
@@ -495,11 +500,13 @@ def get_mission_deliverable(mission_id: int):
 @router.get("/{mission_id}/worker/status")
 def get_mission_worker_status(mission_id: int):
     worker = get_worker_status()
+    lease = get_worker_lease(mission_id)
 
     return {
         "success": True,
         "requested_mission_id": mission_id,
         "worker": worker,
+        "lease": lease,
     }
 
 
