@@ -2040,7 +2040,6 @@ export default function MissionQueue() {
       setOpenResearchId(null);
       setOpenDeliverableId(null);
       setOpenWorkspaceId(null);
-    setOpenWorkspaceId(null);
       setOpenTasksId(missionId);
 
       await Promise.all([
