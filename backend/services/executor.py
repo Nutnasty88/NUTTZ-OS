@@ -1535,16 +1535,24 @@ def _complete_workspace_execution_task(
         conn = get_connection()
 
         try:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE mission_tasks
                 SET
                     status='Error',
                     result=?
                 WHERE id=?
+                  AND status='Running'
                 """,
                 (str(error), task["id"]),
             )
+
+            if cursor.rowcount != 1:
+                conn.rollback()
+                raise RuntimeError(
+                    f'Task {task["id"]} execution failed after its '
+                    "persisted Running state was lost."
+                ) from error
 
             conn.execute(
                 """
@@ -1576,7 +1584,7 @@ def _complete_workspace_execution_task(
     conn = get_connection()
 
     try:
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE mission_tasks
             SET
@@ -1584,9 +1592,17 @@ def _complete_workspace_execution_task(
                 result=?,
                 completed_at=CURRENT_TIMESTAMP
             WHERE id=?
+              AND status='Running'
             """,
             (result, task["id"]),
         )
+
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise RuntimeError(
+                f'Task {task["id"]} completion was rejected because '
+                "its persisted Running state was lost."
+            )
 
         counts = conn.execute(
             """
@@ -3290,16 +3306,25 @@ def execute_next_task(mission_id: int) -> dict[str, Any]:
                 "completed_tasks": completed,
             }
 
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE mission_tasks
             SET
                 status='Running',
                 started_at=CURRENT_TIMESTAMP
             WHERE id=?
+              AND status='Pending'
             """,
             (task["id"],),
         )
+
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise RuntimeError(
+                f'Task {task["id"]} could not be claimed because '
+                "its persisted state changed before execution started."
+            )
+
         conn.commit()
     finally:
         conn.close()
@@ -3414,16 +3439,24 @@ Task instructions:
         conn = get_connection()
 
         try:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE mission_tasks
                 SET
                     status='Error',
                     result=?
                 WHERE id=?
+                  AND status='Running'
                 """,
                 (str(error), task["id"]),
             )
+
+            if cursor.rowcount != 1:
+                conn.rollback()
+                raise RuntimeError(
+                    f'Task {task["id"]} execution failed after its '
+                    "persisted Running state was lost."
+                ) from error
 
             conn.execute(
                 """
@@ -3452,7 +3485,7 @@ Task instructions:
     conn = get_connection()
 
     try:
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE mission_tasks
             SET
@@ -3460,9 +3493,17 @@ Task instructions:
                 result=?,
                 completed_at=CURRENT_TIMESTAMP
             WHERE id=?
+              AND status='Running'
             """,
             (result, task["id"]),
         )
+
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise RuntimeError(
+                f'Task {task["id"]} completion was rejected because '
+                "its persisted Running state was lost."
+            )
 
         counts = conn.execute(
             """
