@@ -2222,6 +2222,91 @@ export default function MissionQueue() {
   }
 
 
+  async function reclaimOrphanedTask(missionId) {
+    setWorkerActionMissionId(missionId);
+
+    setErrors((current) => ({
+      ...current,
+      [missionId]: "",
+    }));
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/missions/${missionId}/recovery/reclaim-orphan?delay_seconds=2`,
+        {
+          method: "POST",
+        },
+      );
+
+      const data = await response
+        .json()
+        .catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail ||
+            "Orphaned mission recovery failed.",
+        );
+      }
+
+      setWorker(data.worker || EMPTY_WORKER);
+
+      setTasksByMission((current) => ({
+        ...current,
+        [missionId]: data.tasks || [],
+      }));
+
+      if (data.success) {
+        setRecoveryByMission((current) => ({
+          ...current,
+          [missionId]: {
+            ...(current[missionId] || {}),
+            mission_id: missionId,
+            mission_status: "Running",
+            recovery: {
+              state: "worker_owned",
+              operator_action_required: false,
+              can_resume: false,
+              message:
+                "Orphaned task reclaimed. Autonomous Worker recovery is starting.",
+            },
+            lease: data.lease || null,
+            worker: data.worker || EMPTY_WORKER,
+          },
+        }));
+      }
+
+      setOpenDetailsId(null);
+      setOpenPlanId(null);
+      setOpenResearchId(null);
+      setOpenDeliverableId(null);
+      setOpenWorkspaceId(null);
+      setOpenTasksId(missionId);
+
+      await Promise.all([
+        loadMissions(),
+        loadTasks(missionId),
+        loadRecoveryStatus(missionId),
+      ]);
+
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        [missionId]: error.message,
+      }));
+
+      await Promise.allSettled([
+        loadMissions(),
+        loadTasks(missionId),
+        loadRecoveryStatus(missionId),
+      ]);
+
+    } finally {
+      setWorkerActionMissionId(null);
+    }
+  }
+
+
   async function resumeInterruptedTask(missionId) {
     setWorkerActionMissionId(missionId);
 
@@ -2886,6 +2971,46 @@ export default function MissionQueue() {
                   {isWorkerAction
                     ? "Retrying task..."
                     : "↻ Retry Blocked Task"}
+                </button>
+              )}
+
+
+              {recoveryState === "orphaned_running" && (
+                <button
+                  type="button"
+                  disabled={
+                    isWorkerAction ||
+                    worker.thread_alive ||
+                    recovery.lease?.active
+                  }
+                  onClick={() =>
+                    reclaimOrphanedTask(mission.id)
+                  }
+                  style={{
+                    padding: "7px 13px",
+                    background: isWorkerAction
+                      ? "#6b3d3d"
+                      : "#b84f4f",
+                    color: "white",
+                    border: "1px solid #df6a6a",
+                    borderRadius: "4px",
+                    cursor:
+                      isWorkerAction ||
+                      worker.thread_alive ||
+                      recovery.lease?.active
+                        ? "not-allowed"
+                        : "pointer",
+                    opacity:
+                      isWorkerAction ||
+                      worker.thread_alive ||
+                      recovery.lease?.active
+                        ? 0.6
+                        : 1,
+                  }}
+                >
+                  {isWorkerAction
+                    ? "Reclaiming task..."
+                    : "↻ Recover Orphaned Task"}
                 </button>
               )}
 
