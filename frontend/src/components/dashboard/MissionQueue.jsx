@@ -116,6 +116,71 @@ function missionToneStyle(tone) {
 }
 
 
+function recoveryTone(state) {
+  const tones = {
+    worker_owned: {
+      label: "WORKER OWNED",
+      color: "#55a7ff",
+      background: "rgba(85, 167, 255, 0.10)",
+      border: "1px solid rgba(85, 167, 255, 0.35)",
+    },
+
+    evidence_blocked: {
+      label: "EVIDENCE BLOCKED",
+      color: "#ffd166",
+      background: "rgba(255, 209, 102, 0.10)",
+      border: "1px solid rgba(255, 209, 102, 0.35)",
+    },
+
+    interrupted: {
+      label: "INTERRUPTED",
+      color: "#ff9f6e",
+      background: "rgba(255, 159, 110, 0.10)",
+      border: "1px solid rgba(255, 159, 110, 0.35)",
+    },
+
+    orphaned_running: {
+      label: "ORPHANED RUNNING",
+      color: "#ff7b7b",
+      background: "rgba(255, 123, 123, 0.10)",
+      border: "1px solid rgba(255, 123, 123, 0.35)",
+    },
+
+    ready: {
+      label: "READY",
+      color: "#4de3a5",
+      background: "rgba(77, 227, 165, 0.10)",
+      border: "1px solid rgba(77, 227, 165, 0.35)",
+    },
+
+    completed: {
+      label: "COMPLETE",
+      color: "#4de3a5",
+      background: "rgba(77, 227, 165, 0.08)",
+      border: "1px solid rgba(77, 227, 165, 0.25)",
+    },
+
+    idle: {
+      label: "IDLE",
+      color: "#aab8c8",
+      background: "rgba(170, 184, 200, 0.08)",
+      border: "1px solid rgba(170, 184, 200, 0.22)",
+    },
+  };
+
+  return (
+    tones[state] || {
+      label: String(state || "UNKNOWN")
+        .replaceAll("_", " ")
+        .toUpperCase(),
+      color: "#aab8c8",
+      background: "rgba(170, 184, 200, 0.08)",
+      border: "1px solid rgba(170, 184, 200, 0.22)",
+    }
+  );
+}
+
+
 function missionPolicy(status) {
   const policies = {
     Pending: {
@@ -1465,6 +1530,7 @@ export default function MissionQueue() {
   const [tasksByMission, setTasksByMission] = useState({});
   const [deliverablesByMission, setDeliverablesByMission] =
     useState({});
+  const [recoveryByMission, setRecoveryByMission] = useState({});
   const [errors, setErrors] = useState({});
   const [worker, setWorker] = useState(EMPTY_WORKER);
 
@@ -1562,6 +1628,34 @@ export default function MissionQueue() {
   }, []);
 
 
+  const loadRecoveryStatus = useCallback(
+    async (missionId) => {
+      const response = await fetch(
+        `${API_BASE}/missions/${missionId}/recovery-status`,
+      );
+
+      const data = await response
+        .json()
+        .catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail ||
+            "Failed to load mission recovery status.",
+        );
+      }
+
+      setRecoveryByMission((current) => ({
+        ...current,
+        [missionId]: data,
+      }));
+
+      return data;
+    },
+    [],
+  );
+
+
   const loadWorkerStatus = useCallback(async (missionId) => {
     const response = await fetch(
       `${API_BASE}/missions/${missionId}/worker/status`,
@@ -1589,6 +1683,74 @@ export default function MissionQueue() {
 
     return () => clearInterval(timer);
   }, [loadMissions]);
+
+
+  const recoveryMissionIds = missions
+    .filter((mission) =>
+      [
+        "Pending",
+        "Running",
+        "Blocked",
+        "Interrupted",
+        "Report Error",
+      ].includes(mission.status),
+    )
+    .map((mission) => mission.id);
+
+  const recoveryMissionKey =
+    recoveryMissionIds.join(",");
+
+
+  useEffect(() => {
+    if (!recoveryMissionKey) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    async function refreshRecoveryStatuses() {
+      const missionIds = recoveryMissionKey
+        .split(",")
+        .filter(Boolean)
+        .map(Number);
+
+      await Promise.allSettled(
+        missionIds.map(async (missionId) => {
+          try {
+            const data = await loadRecoveryStatus(
+              missionId,
+            );
+
+            if (cancelled) {
+              return;
+            }
+
+            return data;
+          } catch (error) {
+            console.error(
+              `Recovery status error for mission ${missionId}:`,
+              error,
+            );
+          }
+        }),
+      );
+    }
+
+    refreshRecoveryStatuses();
+
+    const timer = setInterval(
+      refreshRecoveryStatuses,
+      5000,
+    );
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [
+    recoveryMissionKey,
+    loadRecoveryStatus,
+  ]);
 
 
   const statusProbeMissionId = missions[0]?.id;
@@ -2397,6 +2559,9 @@ export default function MissionQueue() {
           : [];
         const tasks = tasksByMission[mission.id] || [];
         const deliverable = deliverablesByMission[mission.id];
+        const recovery = recoveryByMission[mission.id];
+        const recoveryState = recovery?.recovery?.state;
+        const recoveryStyle = recoveryTone(recoveryState);
 
         const areDetailsOpen = openDetailsId === mission.id;
         const isPlanOpen = openPlanId === mission.id;
@@ -2457,6 +2622,91 @@ export default function MissionQueue() {
             >
               {mission.status}
             </div>
+
+            {recovery && recoveryState && (
+              <div
+                style={{
+                  marginTop: "10px",
+                  padding: "10px 12px",
+                  borderRadius: "6px",
+                  color: recoveryStyle.color,
+                  background: recoveryStyle.background,
+                  border: recoveryStyle.border,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "10px",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <strong
+                    style={{
+                      fontSize: "11px",
+                      letterSpacing: "0.5px",
+                    }}
+                  >
+                    {recoveryStyle.label}
+                  </strong>
+
+                  {recovery.lease?.active && (
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        opacity: 0.85,
+                      }}
+                    >
+                      Lease active
+                    </span>
+                  )}
+                </div>
+
+                <div
+                  style={{
+                    marginTop: "5px",
+                    fontSize: "12px",
+                    lineHeight: 1.45,
+                    color: "#d7e1ec",
+                  }}
+                >
+                  {recovery.recovery?.message ||
+                    "Recovery status available."}
+                </div>
+
+                {recovery.evidence?.required && (
+                  <div
+                    style={{
+                      marginTop: "6px",
+                      fontSize: "11px",
+                      color: "#ffd166",
+                    }}
+                  >
+                    Evidence required:{" "}
+                    {recovery.evidence.requirement ||
+                      "Verified execution evidence required."}
+                  </div>
+                )}
+
+                {recovery.recovery
+                  ?.operator_action_required && (
+                  <div
+                    style={{
+                      marginTop: "6px",
+                      fontSize: "11px",
+                      color: "#ffcf9f",
+                    }}
+                  >
+                    Operator action required
+                    {recovery.recovery.can_resume
+                      ? " · Resume available"
+                      : ""}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div
               style={{
