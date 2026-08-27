@@ -497,6 +497,197 @@ def get_mission_deliverable(mission_id: int):
     return deliverable
 
 
+@router.get("/{mission_id}/recovery-status")
+def get_mission_recovery_status(mission_id: int):
+    """
+    Return a read-only recovery/observability summary for a mission.
+
+    This endpoint does not mutate mission, task, evidence, worker,
+    or lease state.
+    """
+    conn = get_connection()
+
+    try:
+        mission = conn.execute(
+            """
+            SELECT
+                id,
+                title,
+                status,
+                progress
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if mission is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Mission {mission_id} was not found.",
+            )
+
+        task = conn.execute(
+            """
+            SELECT
+                id,
+                position,
+                title,
+                status,
+                result,
+                started_at,
+                completed_at
+            FROM mission_tasks
+            WHERE
+                mission_id=?
+                AND status IN (
+                    'Blocked',
+                    'Interrupted',
+                    'Running',
+                    'Pending'
+                )
+            ORDER BY
+                CASE status
+                    WHEN 'Blocked' THEN 1
+                    WHEN 'Interrupted' THEN 2
+                    WHEN 'Running' THEN 3
+                    WHEN 'Pending' THEN 4
+                    ELSE 5
+                END,
+                position ASC
+            LIMIT 1
+            """,
+            (mission_id,),
+        ).fetchone()
+
+    finally:
+        conn.close()
+
+    worker = get_worker_status()
+    lease = get_worker_lease(mission_id)
+
+    task_data = dict(task) if task is not None else None
+
+    evidence = {
+        "required": False,
+        "verified": False,
+        "requirement": "",
+        "safe_tools_can_satisfy": False,
+    }
+
+    if task_data is not None:
+        result = task_data.pop("result", "") or ""
+        marker = "EVIDENCE RECORD:"
+
+        if marker in result:
+            raw = result.split(marker, 1)[1].strip()
+
+            try:
+                import json
+
+                record = json.loads(raw)
+
+                if isinstance(record, dict):
+                    evidence = {
+                        "required": bool(
+                            record.get("required", False)
+                        ),
+                        "verified": bool(
+                            record.get("verified", False)
+                        ),
+                        "requirement": str(
+                            record.get("requirement", "")
+                        ),
+                        "safe_tools_can_satisfy": bool(
+                            record.get(
+                                "safe_tools_can_satisfy",
+                                False,
+                            )
+                        ),
+                    }
+            except (TypeError, ValueError):
+                pass
+
+    mission_status = mission["status"]
+    task_status = (
+        task_data["status"]
+        if task_data is not None
+        else None
+    )
+
+    lease_active = bool(
+        lease and lease.get("active")
+    )
+
+    if lease_active:
+        recovery_state = "worker_owned"
+        operator_action_required = False
+        can_resume = False
+        message = (
+            "An active worker lease currently owns this mission."
+        )
+
+    elif task_status == "Blocked":
+        recovery_state = "evidence_blocked"
+        operator_action_required = True
+        can_resume = False
+        message = (
+            "The mission is blocked waiting for verified evidence."
+        )
+
+    elif task_status == "Interrupted":
+        recovery_state = "interrupted"
+        operator_action_required = True
+        can_resume = True
+        message = (
+            "Execution was interrupted and requires "
+            "operator-approved recovery."
+        )
+
+    elif task_status == "Running":
+        recovery_state = "orphaned_running"
+        operator_action_required = True
+        can_resume = False
+        message = (
+            "A task is persisted as Running without an active lease."
+        )
+
+    elif mission_status == "Completed":
+        recovery_state = "completed"
+        operator_action_required = False
+        can_resume = False
+        message = "The mission is complete."
+
+    elif task_status == "Pending":
+        recovery_state = "ready"
+        operator_action_required = False
+        can_resume = True
+        message = "The mission has pending work ready to execute."
+
+    else:
+        recovery_state = "idle"
+        operator_action_required = False
+        can_resume = False
+        message = "No recovery action is currently required."
+
+    return {
+        "success": True,
+        "mission_id": mission_id,
+        "mission_status": mission_status,
+        "progress": int(mission["progress"] or 0),
+        "recovery": {
+            "state": recovery_state,
+            "operator_action_required": operator_action_required,
+            "can_resume": can_resume,
+            "message": message,
+        },
+        "task": task_data,
+        "evidence": evidence,
+        "lease": lease,
+        "worker": worker,
+    }
+
+
 @router.get("/{mission_id}/worker/status")
 def get_mission_worker_status(mission_id: int):
     worker = get_worker_status()
