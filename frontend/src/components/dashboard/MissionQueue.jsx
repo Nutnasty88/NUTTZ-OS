@@ -2231,48 +2231,50 @@ export default function MissionQueue() {
     }));
 
     try {
-      const resetResponse = await fetch(
-        `${API_BASE}/missions/${missionId}/tasks/reset-interrupted`,
+      const response = await fetch(
+        `${API_BASE}/missions/${missionId}/recovery/resume?delay_seconds=2`,
         {
           method: "POST",
         },
       );
 
-      const resetData = await resetResponse
+      const data = await response
         .json()
         .catch(() => ({}));
 
-      if (!resetResponse.ok) {
+      if (!response.ok) {
         throw new Error(
-          resetData.detail ||
-            "Interrupted task reset failed.",
+          data.detail ||
+            "Interrupted mission recovery failed.",
         );
       }
 
-      const workerResponse = await fetch(
-        `${API_BASE}/missions/${missionId}/worker/start?delay_seconds=2`,
-        {
-          method: "POST",
-        },
-      );
-
-      const workerData = await workerResponse
-        .json()
-        .catch(() => ({}));
-
-      if (!workerResponse.ok) {
-        throw new Error(
-          workerData.detail ||
-            "Task was reset, but the worker failed to resume.",
-        );
-      }
-
-      setWorker(workerData.worker || EMPTY_WORKER);
+      setWorker(data.worker || EMPTY_WORKER);
 
       setTasksByMission((current) => ({
         ...current,
-        [missionId]: resetData.tasks || [],
+        [missionId]: data.tasks || [],
       }));
+
+      if (data.success) {
+        setRecoveryByMission((current) => ({
+          ...current,
+          [missionId]: {
+            ...(current[missionId] || {}),
+            mission_id: missionId,
+            mission_status: "Running",
+            recovery: {
+              state: "worker_owned",
+              operator_action_required: false,
+              can_resume: false,
+              message:
+                "Autonomous Worker recovery is starting.",
+            },
+            lease: data.lease || null,
+            worker: data.worker || EMPTY_WORKER,
+          },
+        }));
+      }
 
       setOpenDetailsId(null);
       setOpenPlanId(null);
@@ -2284,15 +2286,21 @@ export default function MissionQueue() {
       await Promise.all([
         loadMissions(),
         loadTasks(missionId),
+        loadRecoveryStatus(missionId),
       ]);
+
     } catch (error) {
       setErrors((current) => ({
         ...current,
         [missionId]: error.message,
       }));
 
-      await loadTasks(missionId).catch(() => {});
-      await loadMissions();
+      await Promise.allSettled([
+        loadMissions(),
+        loadTasks(missionId),
+        loadRecoveryStatus(missionId),
+      ]);
+
     } finally {
       setWorkerActionMissionId(null);
     }
