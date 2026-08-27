@@ -6,6 +6,7 @@ from services.executor import (
     execute_next_task,
     get_repair_history,
     get_tasks,
+    interrupt_orphaned_running_task,
     reset_blocked_task,
     reset_interrupted_task,
     rollback_interrupted_task_reset,
@@ -416,6 +417,76 @@ def reset_mission_interrupted_task(mission_id: int):
         ),
         "reset": reset,
         "tasks": get_tasks(mission_id),
+    }
+
+
+@router.post("/{mission_id}/recovery/reclaim-orphan")
+def reclaim_orphaned_mission(
+    mission_id: int,
+    delay_seconds: float = 2.0,
+):
+    """
+    Reclaim an orphaned Running task and continue through guarded
+    interrupted-mission recovery.
+
+    The orphan transition is deliberately conservative:
+    Running -> Interrupted -> guarded resume.
+    """
+    current_worker = get_worker_status()
+
+    if current_worker.get("thread_alive"):
+        active_mission_id = current_worker.get("mission_id")
+
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot reclaim an orphaned mission while an "
+                "Autonomous Worker is active"
+                + (
+                    f" for mission {active_mission_id}."
+                    if active_mission_id is not None
+                    else "."
+                )
+            ),
+        )
+
+    try:
+        interrupted = interrupt_orphaned_running_task(
+            mission_id,
+        )
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=404,
+            detail=str(error),
+        ) from error
+
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Orphaned mission recovery failed: {error}"
+            ),
+        ) from error
+
+    resumed = resume_mission_recovery(
+        mission_id=mission_id,
+        delay_seconds=delay_seconds,
+    )
+
+    return {
+        **resumed,
+        "message": (
+            f"Orphaned mission {mission_id} was reclaimed from "
+            "Running to Interrupted and guarded recovery started."
+        ),
+        "orphan_recovery": interrupted,
     }
 
 

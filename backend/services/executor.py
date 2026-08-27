@@ -2846,6 +2846,180 @@ def rollback_interrupted_task_reset(
     }
 
 
+def interrupt_orphaned_running_task(
+    mission_id: int,
+) -> dict[str, Any]:
+    """
+    Convert one orphaned persisted Running task to Interrupted.
+
+    This function does not restart execution. It only performs the
+    conservative recovery transition required before operator-approved
+    guarded resume can occur.
+
+    A mission with an active worker lease must never be interrupted by
+    this recovery path.
+    """
+    ensure_task_table()
+
+    conn = get_connection()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        mission = conn.execute(
+            """
+            SELECT id, status, progress
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if mission is None:
+            conn.rollback()
+
+            raise ValueError(
+                f"Mission {mission_id} was not found."
+            )
+
+        task = conn.execute(
+            """
+            SELECT
+                id,
+                position,
+                title,
+                status,
+                started_at
+            FROM mission_tasks
+            WHERE
+                mission_id=?
+                AND status='Running'
+            ORDER BY position ASC
+            LIMIT 1
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if task is None:
+            conn.rollback()
+
+            raise RuntimeError(
+                f"Mission {mission_id} has no Running task "
+                "eligible for orphan recovery."
+            )
+
+        lease_table_exists = conn.execute(
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE
+                type='table'
+                AND name='mission_worker_leases'
+            """
+        ).fetchone() is not None
+
+        if lease_table_exists:
+            lease = conn.execute(
+                """
+                SELECT expires_at
+                FROM mission_worker_leases
+                WHERE mission_id=?
+                """,
+                (mission_id,),
+            ).fetchone()
+
+            if lease is not None:
+                try:
+                    expires_at = datetime.fromisoformat(
+                        lease["expires_at"]
+                    )
+                except (TypeError, ValueError):
+                    expires_at = None
+
+                now = datetime.now(timezone.utc)
+
+                if (
+                    expires_at is not None
+                    and expires_at > now
+                ):
+                    conn.rollback()
+
+                    raise RuntimeError(
+                        f"Mission {mission_id} still has an "
+                        "active worker lease and cannot be "
+                        "recovered as orphaned."
+                    )
+
+        cursor = conn.execute(
+            """
+            UPDATE mission_tasks
+            SET status='Interrupted'
+            WHERE
+                id=?
+                AND mission_id=?
+                AND status='Running'
+            """,
+            (
+                task["id"],
+                mission_id,
+            ),
+        )
+
+        if cursor.rowcount != 1:
+            conn.rollback()
+
+            raise RuntimeError(
+                f"Task {task['id']} changed before orphan "
+                "recovery could complete."
+            )
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET
+                status='Interrupted',
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (mission_id,),
+        )
+
+        conn.commit()
+
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+        raise
+
+    finally:
+        conn.close()
+
+    log_event(
+        mission_id,
+        "Recovery",
+        "orphaned",
+        (
+            f'Task {task["position"]} was explicitly changed '
+            "from orphaned Running state to Interrupted after "
+            "operator-approved recovery."
+        ),
+    )
+
+    return {
+        "mission_id": mission_id,
+        "task_id": task["id"],
+        "position": task["position"],
+        "title": task["title"],
+        "status": "Interrupted",
+        "mission_status": "Interrupted",
+        "progress": int(mission["progress"] or 0),
+        "started_at": task["started_at"],
+    }
+
+
 def recover_interrupted_tasks() -> dict[str, Any]:
     """
     Mark orphaned persisted Running tasks as Interrupted.
