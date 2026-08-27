@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
 from app.database.database import get_connection
@@ -2737,10 +2738,14 @@ def reset_interrupted_task(
 
 def recover_interrupted_tasks() -> dict[str, Any]:
     """
-    Mark persisted Running tasks as Interrupted.
+    Mark orphaned persisted Running tasks as Interrupted.
 
     A Running task can survive a backend crash because task execution
     state is persisted while the Autonomous Worker thread is not.
+
+    An unexpired mission worker lease proves another worker process may
+    still legitimately own the task, so startup recovery must leave that
+    task untouched.
 
     Recovery is deliberately conservative. Interrupted tasks are not
     automatically retried because Builder or execution tasks may have
@@ -2751,6 +2756,16 @@ def recover_interrupted_tasks() -> dict[str, Any]:
     conn = get_connection()
 
     try:
+        lease_table_exists = conn.execute(
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE
+                type='table'
+                AND name='mission_worker_leases'
+            """
+        ).fetchone() is not None
+
         running_tasks = conn.execute(
             """
             SELECT
@@ -2766,8 +2781,51 @@ def recover_interrupted_tasks() -> dict[str, Any]:
         ).fetchall()
 
         recovered = []
+        protected = []
+        now = datetime.now(timezone.utc)
 
         for task in running_tasks:
+            active_lease = None
+
+            if lease_table_exists:
+                active_lease = conn.execute(
+                    """
+                    SELECT
+                        owner_token,
+                        heartbeat_at,
+                        expires_at
+                    FROM mission_worker_leases
+                    WHERE mission_id=?
+                    """,
+                    (task["mission_id"],),
+                ).fetchone()
+
+            if active_lease is not None:
+                try:
+                    expires_at = datetime.fromisoformat(
+                        active_lease["expires_at"]
+                    )
+                except (TypeError, ValueError):
+                    expires_at = None
+
+                if (
+                    expires_at is not None
+                    and expires_at > now
+                ):
+                    protected.append(
+                        {
+                            "task_id": task["id"],
+                            "mission_id": task["mission_id"],
+                            "position": task["position"],
+                            "title": task["title"],
+                            "started_at": task["started_at"],
+                            "lease_expires_at": (
+                                active_lease["expires_at"]
+                            ),
+                        }
+                    )
+                    continue
+
             cursor = conn.execute(
                 """
                 UPDATE mission_tasks
@@ -2816,15 +2874,16 @@ def recover_interrupted_tasks() -> dict[str, Any]:
             (
                 f'Task {task["position"]} was marked Interrupted '
                 "after persisted Running state was found without "
-                "a surviving worker process."
+                "an active worker lease."
             ),
         )
 
     return {
         "recovered_count": len(recovered),
+        "protected_count": len(protected),
         "tasks": recovered,
+        "protected_tasks": protected,
     }
-
 
 def execute_next_task(mission_id: int) -> dict[str, Any]:
     ensure_task_table()
