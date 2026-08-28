@@ -7,7 +7,10 @@ from typing import Any
 
 from app.database.database import get_connection
 from app.services.events import log_event
-from app.services.reporter import create_deliverable
+from app.services.reporter import (
+    create_deliverable,
+    get_deliverable,
+)
 from services.executor import (
     execute_next_task,
     finalize_mission_completion,
@@ -398,41 +401,48 @@ def _complete_mission(mission_id: int) -> None:
         "All verified tasks completed. Reporter is generating the final deliverable.",
     )
 
-    try:
-        deliverable = create_deliverable(mission_id)
-    except Exception as error:
-        conn = get_connection()
+    deliverable = get_deliverable(mission_id)
 
+    if not (
+        deliverable
+        and deliverable.get("status") == "Ready"
+        and deliverable.get("content", "").strip()
+    ):
         try:
-            conn.execute(
-                """
-                UPDATE missions
-                SET
-                    status='Report Error',
-                    progress=100,
-                    updated_at=CURRENT_TIMESTAMP
-                WHERE id=?
-                """,
-                (mission_id,),
+            deliverable = create_deliverable(mission_id)
+        except Exception as error:
+            conn = get_connection()
+
+            try:
+                conn.execute(
+                    """
+                    UPDATE missions
+                    SET
+                        status='Report Error',
+                        progress=100,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE id=?
+                    """,
+                    (mission_id,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            log_event(
+                mission_id,
+                "Autonomous Worker",
+                "error",
+                (
+                    "All mission tasks completed, but final deliverable "
+                    f"generation failed: {error}"
+                ),
             )
-            conn.commit()
-        finally:
-            conn.close()
 
-        log_event(
-            mission_id,
-            "Autonomous Worker",
-            "error",
-            (
-                "All mission tasks completed, but final deliverable "
-                f"generation failed: {error}"
-            ),
-        )
-
-        raise RuntimeError(
-            "Mission tasks completed successfully, but Reporter "
-            f"failed to create the final deliverable: {error}"
-        ) from error
+            raise RuntimeError(
+                "Mission tasks completed successfully, but Reporter "
+                f"failed to create the final deliverable: {error}"
+            ) from error
 
     if not deliverable:
         raise RuntimeError(
