@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -36,6 +37,7 @@ def ensure_task_table() -> None:
                 instructions TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'Pending',
                 result TEXT DEFAULT '',
+                execution_token TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 started_at TIMESTAMP,
                 completed_at TIMESTAMP,
@@ -44,6 +46,22 @@ def ensure_task_table() -> None:
             )
             """
         )
+
+        columns = {
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA table_info(mission_tasks)"
+            ).fetchall()
+        }
+
+        if "execution_token" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE mission_tasks
+                ADD COLUMN execution_token TEXT
+                """
+            )
+
         conn.commit()
     finally:
         conn.close()
@@ -1295,6 +1313,7 @@ def _rollback_failed_builder_repair(
 def _complete_workspace_execution_task(
     mission: Any,
     task: Any,
+    execution_token: str,
 ) -> dict[str, Any]:
     """Execute and persist verified Builder workspace evidence."""
     mission_id = int(mission["id"])
@@ -1540,11 +1559,17 @@ def _complete_workspace_execution_task(
                 UPDATE mission_tasks
                 SET
                     status='Error',
-                    result=?
+                    result=?,
+                    execution_token=NULL
                 WHERE id=?
                   AND status='Running'
+                  AND execution_token=?
                 """,
-                (str(error), task["id"]),
+                (
+                    str(error),
+                    task["id"],
+                    execution_token,
+                ),
             )
 
             if cursor.rowcount != 1:
@@ -1590,11 +1615,17 @@ def _complete_workspace_execution_task(
             SET
                 status='Completed',
                 result=?,
-                completed_at=CURRENT_TIMESTAMP
+                completed_at=CURRENT_TIMESTAMP,
+                execution_token=NULL
             WHERE id=?
               AND status='Running'
+              AND execution_token=?
             """,
-            (result, task["id"]),
+            (
+                result,
+                task["id"],
+                execution_token,
+            ),
         )
 
         if cursor.rowcount != 1:
@@ -1791,6 +1822,7 @@ def _future_project_task_state(
 def _complete_builder_task(
     mission: Any,
     task: Any,
+    execution_token: str,
 ) -> dict[str, Any]:
     """Execute a Builder task and persist its verified artifacts."""
     mission_id = int(mission["id"])
@@ -2166,16 +2198,30 @@ def _complete_builder_task(
         conn = get_connection()
 
         try:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE mission_tasks
                 SET
                     status='Error',
-                    result=?
+                    result=?,
+                    execution_token=NULL
                 WHERE id=?
+                  AND status='Running'
+                  AND execution_token=?
                 """,
-                (str(error), task["id"]),
+                (
+                    str(error),
+                    task["id"],
+                    execution_token,
+                ),
             )
+
+            if cursor.rowcount != 1:
+                conn.rollback()
+                raise RuntimeError(
+                    f'Task {task["id"]} execution failed after its '
+                    "execution ownership was lost."
+                ) from error
 
             conn.execute(
                 """
@@ -2207,17 +2253,31 @@ def _complete_builder_task(
     conn = get_connection()
 
     try:
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE mission_tasks
             SET
                 status='Completed',
                 result=?,
-                completed_at=CURRENT_TIMESTAMP
+                completed_at=CURRENT_TIMESTAMP,
+                execution_token=NULL
             WHERE id=?
+              AND status='Running'
+              AND execution_token=?
             """,
-            (result, task["id"]),
+            (
+                result,
+                task["id"],
+                execution_token,
+            ),
         )
+
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise RuntimeError(
+                f'Task {task["id"]} completion was rejected because '
+                "its execution ownership was lost."
+            )
 
         counts = conn.execute(
             """
@@ -2455,6 +2515,7 @@ def _block_task_for_missing_evidence(
     reason: str,
     tool_results: list[dict[str, Any]],
     safe_tools_can_satisfy: bool,
+    execution_token: str,
 ) -> dict[str, Any]:
     evidence_record = {
         "required": True,
@@ -2494,17 +2555,31 @@ def _block_task_for_missing_evidence(
             else 0
         )
 
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE mission_tasks
             SET
                 status='Blocked',
                 result=?,
-                completed_at=NULL
+                completed_at=NULL,
+                execution_token=NULL
             WHERE id=?
+              AND status='Running'
+              AND execution_token=?
             """,
-            (result, task["id"]),
+            (
+                result,
+                task["id"],
+                execution_token,
+            ),
         )
+
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise RuntimeError(
+                f'Task {task["id"]} could not be blocked because '
+                "its execution ownership was lost."
+            )
 
         conn.execute(
             """
@@ -2593,7 +2668,8 @@ def reset_blocked_task(
             SET
                 status='Pending',
                 started_at=NULL,
-                completed_at=NULL
+                completed_at=NULL,
+                execution_token=NULL
             WHERE id=?
               AND status='Blocked'
             """,
@@ -2697,7 +2773,8 @@ def reset_interrupted_task(
             SET
                 status='Pending',
                 started_at=NULL,
-                completed_at=NULL
+                completed_at=NULL,
+                execution_token=NULL
             WHERE id=?
               AND status='Interrupted'
             """,
@@ -2809,7 +2886,8 @@ def rollback_interrupted_task_reset(
             SET
                 status='Interrupted',
                 started_at=NULL,
-                completed_at=NULL
+                completed_at=NULL,
+                execution_token=NULL
             WHERE
                 id=?
                 AND mission_id=?
@@ -2969,7 +3047,9 @@ def interrupt_orphaned_running_task(
         cursor = conn.execute(
             """
             UPDATE mission_tasks
-            SET status='Interrupted'
+            SET
+                status='Interrupted',
+                execution_token=NULL
             WHERE
                 id=?
                 AND mission_id=?
@@ -3129,7 +3209,9 @@ def recover_interrupted_tasks() -> dict[str, Any]:
             cursor = conn.execute(
                 """
                 UPDATE mission_tasks
-                SET status='Interrupted'
+                SET
+                    status='Interrupted',
+                    execution_token=NULL
                 WHERE id=?
                   AND status='Running'
                 """,
@@ -3306,16 +3388,23 @@ def execute_next_task(mission_id: int) -> dict[str, Any]:
                 "completed_tasks": completed,
             }
 
+        execution_token = uuid.uuid4().hex
+
         cursor = conn.execute(
             """
             UPDATE mission_tasks
             SET
                 status='Running',
-                started_at=CURRENT_TIMESTAMP
+                started_at=CURRENT_TIMESTAMP,
+                execution_token=?
             WHERE id=?
               AND status='Pending'
+              AND execution_token IS NULL
             """,
-            (task["id"],),
+            (
+                execution_token,
+                task["id"],
+            ),
         )
 
         if cursor.rowcount != 1:
@@ -3340,12 +3429,14 @@ def execute_next_task(mission_id: int) -> dict[str, Any]:
         return _complete_builder_task(
             mission=mission,
             task=task,
+            execution_token=execution_token,
         )
 
     if _is_workspace_execution_task(task):
         return _complete_workspace_execution_task(
             mission=mission,
             task=task,
+            execution_token=execution_token,
         )
 
     system_prompt = """
@@ -3394,6 +3485,7 @@ Task instructions:
             reason=evidence_reason,
             tool_results=safe_tool_results,
             safe_tools_can_satisfy=safe_tools_can_satisfy,
+            execution_token=execution_token,
         )
 
     if safe_tool_results:
@@ -3444,18 +3536,24 @@ Task instructions:
                 UPDATE mission_tasks
                 SET
                     status='Error',
-                    result=?
+                    result=?,
+                    execution_token=NULL
                 WHERE id=?
                   AND status='Running'
+                  AND execution_token=?
                 """,
-                (str(error), task["id"]),
+                (
+                    str(error),
+                    task["id"],
+                    execution_token,
+                ),
             )
 
             if cursor.rowcount != 1:
                 conn.rollback()
                 raise RuntimeError(
                     f'Task {task["id"]} execution failed after its '
-                    "persisted Running state was lost."
+                    "execution ownership was lost."
                 ) from error
 
             conn.execute(
@@ -3491,18 +3589,24 @@ Task instructions:
             SET
                 status='Completed',
                 result=?,
-                completed_at=CURRENT_TIMESTAMP
+                completed_at=CURRENT_TIMESTAMP,
+                execution_token=NULL
             WHERE id=?
               AND status='Running'
+              AND execution_token=?
             """,
-            (result, task["id"]),
+            (
+                result,
+                task["id"],
+                execution_token,
+            ),
         )
 
         if cursor.rowcount != 1:
             conn.rollback()
             raise RuntimeError(
                 f'Task {task["id"]} completion was rejected because '
-                "its persisted Running state was lost."
+                "its execution ownership was lost."
             )
 
         counts = conn.execute(
