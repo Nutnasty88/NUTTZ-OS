@@ -97,6 +97,32 @@ def acquire_worker_lease(
                 (mission_id,),
             )
 
+        running_task = conn.execute(
+            """
+            SELECT
+                id,
+                position,
+                title,
+                execution_token
+            FROM mission_tasks
+            WHERE
+                mission_id=?
+                AND status='Running'
+            ORDER BY position ASC
+            LIMIT 1
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if running_task is not None:
+            conn.rollback()
+
+            raise RuntimeError(
+                f"Mission {mission_id} already has Running task "
+                f"{running_task['position']} and cannot acquire "
+                "Autonomous Worker ownership."
+            )
+
         conn.execute(
             """
             INSERT INTO mission_worker_leases (
@@ -555,7 +581,10 @@ def _run_worker(
                 last_error="",
             )
 
-            execution = execute_next_task(mission_id)
+            execution = execute_next_task(
+                mission_id,
+                worker_owner_token=owner_token,
+            )
 
             if lease_lost.is_set():
                 raise RuntimeError(

@@ -3267,12 +3267,59 @@ def recover_interrupted_tasks() -> dict[str, Any]:
         "protected_tasks": protected,
     }
 
-def execute_next_task(mission_id: int) -> dict[str, Any]:
+def execute_next_task(
+    mission_id: int,
+    worker_owner_token: str | None = None,
+) -> dict[str, Any]:
     ensure_task_table()
 
     conn = get_connection()
 
     try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        lease = conn.execute(
+            """
+            SELECT
+                owner_token,
+                expires_at
+            FROM mission_worker_leases
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        now = datetime.now(timezone.utc)
+        active_lease = False
+
+        if lease is not None:
+            try:
+                lease_expires_at = datetime.fromisoformat(
+                    lease["expires_at"]
+                )
+                active_lease = lease_expires_at > now
+            except (TypeError, ValueError):
+                active_lease = False
+
+        if worker_owner_token is None:
+            if active_lease:
+                conn.rollback()
+                raise RuntimeError(
+                    f"Mission {mission_id} has an active worker "
+                    "lease. Manual task execution is not allowed."
+                )
+        else:
+            if (
+                not active_lease
+                or lease is None
+                or lease["owner_token"] != worker_owner_token
+            ):
+                conn.rollback()
+                raise RuntimeError(
+                    f"Mission {mission_id} worker ownership was "
+                    "lost before task execution could be claimed."
+                )
+
         mission = conn.execute(
             """
             SELECT
