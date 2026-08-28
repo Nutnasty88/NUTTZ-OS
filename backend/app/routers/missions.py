@@ -616,6 +616,18 @@ def resume_mission_recovery(
 
 @router.post("/{mission_id}/execute-next")
 def execute_mission_task(mission_id: int):
+    lease = get_worker_lease(mission_id)
+
+    if lease and lease.get("active"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Mission {mission_id} currently has an active "
+                "Autonomous Worker lease. Manual task execution "
+                "is not allowed while the worker owns the mission."
+            ),
+        )
+
     try:
         executor_result = execute_next_task(mission_id)
     except ValueError as error:
