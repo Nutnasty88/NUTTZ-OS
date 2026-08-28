@@ -1310,10 +1310,61 @@ def _rollback_failed_builder_repair(
     }
 
 
+def _assert_terminal_worker_ownership(
+    conn: Any,
+    mission_id: int,
+    worker_owner_token: str | None,
+) -> None:
+    """
+    Reject autonomous terminal transitions after worker lease loss.
+
+    Manual execution has no worker owner token. Its task ownership is
+    protected by the Running-task / worker-lease interlock.
+    """
+    if worker_owner_token is None:
+        return
+
+    lease = conn.execute(
+        """
+        SELECT
+            owner_token,
+            expires_at
+        FROM mission_worker_leases
+        WHERE mission_id=?
+        """,
+        (mission_id,),
+    ).fetchone()
+
+    if lease is None:
+        raise RuntimeError(
+            f"Mission {mission_id} worker lease was lost before "
+            "the task terminal transition."
+        )
+
+    try:
+        expires_at = datetime.fromisoformat(
+            lease["expires_at"]
+        )
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(
+            f"Mission {mission_id} worker lease expiry is invalid."
+        ) from error
+
+    if (
+        lease["owner_token"] != worker_owner_token
+        or expires_at <= datetime.now(timezone.utc)
+    ):
+        raise RuntimeError(
+            f"Mission {mission_id} worker ownership was lost before "
+            "the task terminal transition."
+        )
+
+
 def _complete_workspace_execution_task(
     mission: Any,
     task: Any,
     execution_token: str,
+    worker_owner_token: str | None,
 ) -> dict[str, Any]:
     """Execute and persist verified Builder workspace evidence."""
     mission_id = int(mission["id"])
@@ -1554,6 +1605,14 @@ def _complete_workspace_execution_task(
         conn = get_connection()
 
         try:
+            conn.execute("BEGIN IMMEDIATE")
+
+            _assert_terminal_worker_ownership(
+                conn,
+                mission_id,
+                worker_owner_token,
+            )
+
             cursor = conn.execute(
                 """
                 UPDATE mission_tasks
@@ -1609,6 +1668,14 @@ def _complete_workspace_execution_task(
     conn = get_connection()
 
     try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        _assert_terminal_worker_ownership(
+            conn,
+            mission_id,
+            worker_owner_token,
+        )
+
         cursor = conn.execute(
             """
             UPDATE mission_tasks
@@ -1823,6 +1890,7 @@ def _complete_builder_task(
     mission: Any,
     task: Any,
     execution_token: str,
+    worker_owner_token: str | None,
 ) -> dict[str, Any]:
     """Execute a Builder task and persist its verified artifacts."""
     mission_id = int(mission["id"])
@@ -2198,6 +2266,14 @@ def _complete_builder_task(
         conn = get_connection()
 
         try:
+            conn.execute("BEGIN IMMEDIATE")
+
+            _assert_terminal_worker_ownership(
+                conn,
+                mission_id,
+                worker_owner_token,
+            )
+
             cursor = conn.execute(
                 """
                 UPDATE mission_tasks
@@ -2253,6 +2329,14 @@ def _complete_builder_task(
     conn = get_connection()
 
     try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        _assert_terminal_worker_ownership(
+            conn,
+            mission_id,
+            worker_owner_token,
+        )
+
         cursor = conn.execute(
             """
             UPDATE mission_tasks
@@ -2516,6 +2600,7 @@ def _block_task_for_missing_evidence(
     tool_results: list[dict[str, Any]],
     safe_tools_can_satisfy: bool,
     execution_token: str,
+    worker_owner_token: str | None,
 ) -> dict[str, Any]:
     evidence_record = {
         "required": True,
@@ -2540,6 +2625,14 @@ def _block_task_for_missing_evidence(
     conn = get_connection()
 
     try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        _assert_terminal_worker_ownership(
+            conn,
+            mission_id,
+            worker_owner_token,
+        )
+
         mission_row = conn.execute(
             """
             SELECT progress
@@ -3477,6 +3570,7 @@ def execute_next_task(
             mission=mission,
             task=task,
             execution_token=execution_token,
+            worker_owner_token=worker_owner_token,
         )
 
     if _is_workspace_execution_task(task):
@@ -3484,6 +3578,7 @@ def execute_next_task(
             mission=mission,
             task=task,
             execution_token=execution_token,
+            worker_owner_token=worker_owner_token,
         )
 
     system_prompt = """
@@ -3533,6 +3628,7 @@ Task instructions:
             tool_results=safe_tool_results,
             safe_tools_can_satisfy=safe_tools_can_satisfy,
             execution_token=execution_token,
+            worker_owner_token=worker_owner_token,
         )
 
     if safe_tool_results:
@@ -3578,6 +3674,14 @@ Task instructions:
         conn = get_connection()
 
         try:
+            conn.execute("BEGIN IMMEDIATE")
+
+            _assert_terminal_worker_ownership(
+                conn,
+                mission_id,
+                worker_owner_token,
+            )
+
             cursor = conn.execute(
                 """
                 UPDATE mission_tasks
@@ -3630,6 +3734,14 @@ Task instructions:
     conn = get_connection()
 
     try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        _assert_terminal_worker_ownership(
+            conn,
+            mission_id,
+            worker_owner_token,
+        )
+
         cursor = conn.execute(
             """
             UPDATE mission_tasks
