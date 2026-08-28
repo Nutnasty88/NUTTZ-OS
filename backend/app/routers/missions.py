@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from app.database.database import get_connection
 from services.executor import (
     execute_next_task,
+    finalize_mission_completion,
     get_repair_history,
     get_tasks,
     interrupt_orphaned_running_task,
@@ -663,24 +664,21 @@ def generate_mission_deliverable(mission_id: int):
             detail=f"Reporter Agent failed: {error}",
         ) from error
 
-    conn = get_connection()
-
     try:
-        conn.execute(
-            """
-            UPDATE missions
-            SET
-                status='Completed',
-                progress=100,
-                updated_at=CURRENT_TIMESTAMP
-            WHERE id=?
-              AND status='Report Error'
-            """,
-            (mission_id,),
+        finalize_mission_completion(
+            mission_id,
+            required_status="Report Error",
         )
-        conn.commit()
-    finally:
-        conn.close()
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
 
     return {
         "success": True,

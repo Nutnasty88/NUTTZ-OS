@@ -3360,6 +3360,123 @@ def recover_interrupted_tasks() -> dict[str, Any]:
         "protected_tasks": protected,
     }
 
+
+def finalize_mission_completion(
+    mission_id: int,
+    required_status: str | None = None,
+) -> dict[str, Any]:
+    """
+    Atomically complete a mission only if its current persisted task
+    set still consists entirely of Completed tasks.
+
+    Reporter generation can take a long time. Task synchronization
+    may replace the task set while Reporter is running, so completion
+    must revalidate the current task state immediately before the
+    mission terminal transition.
+    """
+    ensure_task_table()
+
+    conn = get_connection()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        mission = conn.execute(
+            """
+            SELECT
+                id,
+                status,
+                progress
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if mission is None:
+            conn.rollback()
+            raise ValueError(
+                f"Mission {mission_id} was not found."
+            )
+
+        if (
+            required_status is not None
+            and mission["status"] != required_status
+        ):
+            conn.rollback()
+            raise RuntimeError(
+                f"Mission {mission_id} cannot be finalized from "
+                f"status {mission['status']!r}; expected "
+                f"{required_status!r}."
+            )
+
+        counts = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total_tasks,
+                SUM(
+                    CASE
+                        WHEN status='Completed' THEN 1
+                        ELSE 0
+                    END
+                ) AS completed_tasks
+            FROM mission_tasks
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        total_tasks = int(counts["total_tasks"] or 0)
+        completed_tasks = int(
+            counts["completed_tasks"] or 0
+        )
+
+        if total_tasks == 0:
+            conn.rollback()
+            raise RuntimeError(
+                f"Mission {mission_id} cannot be completed because "
+                "it has no execution tasks."
+            )
+
+        if completed_tasks != total_tasks:
+            conn.rollback()
+            raise RuntimeError(
+                f"Mission {mission_id} completion was rejected "
+                "because its current task set is no longer fully "
+                f"completed ({completed_tasks}/{total_tasks})."
+            )
+
+        cursor = conn.execute(
+            """
+            UPDATE missions
+            SET
+                status='Completed',
+                progress=100,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (mission_id,),
+        )
+
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise RuntimeError(
+                f"Mission {mission_id} completion transition failed."
+            )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+    return {
+        "mission_id": mission_id,
+        "status": "Completed",
+        "progress": 100,
+        "total_tasks": total_tasks,
+        "completed_tasks": completed_tasks,
+    }
+
 def execute_next_task(
     mission_id: int,
     worker_owner_token: str | None = None,

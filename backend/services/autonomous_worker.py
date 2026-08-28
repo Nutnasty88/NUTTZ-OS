@@ -8,7 +8,11 @@ from typing import Any
 from app.database.database import get_connection
 from app.services.events import log_event
 from app.services.reporter import create_deliverable
-from services.executor import execute_next_task, get_tasks
+from services.executor import (
+    execute_next_task,
+    finalize_mission_completion,
+    get_tasks,
+)
 
 
 WORKER_LEASE_SECONDS = 30
@@ -435,23 +439,7 @@ def _complete_mission(mission_id: int) -> None:
             "Reporter returned no final deliverable."
         )
 
-    conn = get_connection()
-
-    try:
-        conn.execute(
-            """
-            UPDATE missions
-            SET
-                status='Completed',
-                progress=100,
-                updated_at=CURRENT_TIMESTAMP
-            WHERE id=?
-            """,
-            (mission_id,),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    finalize_mission_completion(mission_id)
 
     log_event(
         mission_id,
