@@ -12,6 +12,7 @@ from app.services.reporter import (
     get_deliverable,
 )
 from services.executor import (
+    mark_mission_report_error,
     execute_next_task,
     finalize_mission_completion,
     get_tasks,
@@ -414,23 +415,10 @@ def _complete_mission(
         try:
             deliverable = create_deliverable(mission_id)
         except Exception as error:
-            conn = get_connection()
-
-            try:
-                conn.execute(
-                    """
-                    UPDATE missions
-                    SET
-                        status='Report Error',
-                        progress=100,
-                        updated_at=CURRENT_TIMESTAMP
-                    WHERE id=?
-                    """,
-                    (mission_id,),
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            mark_mission_report_error(
+                mission_id,
+                worker_owner_token=worker_owner_token,
+            )
 
             log_event(
                 mission_id,

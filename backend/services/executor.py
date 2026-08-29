@@ -3509,6 +3509,55 @@ def recover_interrupted_tasks() -> dict[str, Any]:
     }
 
 
+def mark_mission_report_error(
+    mission_id: int,
+    worker_owner_token: str | None = None,
+) -> dict[str, Any]:
+    """Mark Reporter failure only while current worker ownership holds."""
+
+    ensure_task_table()
+
+    conn = get_connection()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        _assert_terminal_worker_ownership(
+            conn,
+            mission_id,
+            worker_owner_token,
+        )
+
+        cursor = conn.execute(
+            """
+            UPDATE missions
+            SET
+                status='Report Error',
+                progress=100,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (mission_id,),
+        )
+
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise RuntimeError(
+                f"Mission {mission_id} Report Error transition failed."
+            )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+    return {
+        "mission_id": mission_id,
+        "status": "Report Error",
+        "progress": 100,
+    }
+
+
 def finalize_mission_completion(
     mission_id: int,
     required_status: str | None = None,
