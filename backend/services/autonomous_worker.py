@@ -413,7 +413,10 @@ def _complete_mission(
         and deliverable.get("content", "").strip()
     ):
         try:
-            deliverable = create_deliverable(mission_id)
+            deliverable = create_deliverable(
+                mission_id,
+                worker_owner_token=worker_owner_token,
+            )
         except Exception as error:
             mark_mission_report_error(
                 mission_id,

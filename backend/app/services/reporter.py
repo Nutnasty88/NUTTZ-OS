@@ -3,6 +3,7 @@ from typing import Any
 
 from app.database.database import get_connection
 from app.services.events import log_event
+from services.executor import _assert_terminal_worker_ownership
 from services.ollama_service import chat_with_ollama
 
 
@@ -201,7 +202,10 @@ def _compact_tasks(
     return compact
 
 
-def create_deliverable(mission_id: int) -> dict[str, Any]:
+def create_deliverable(
+    mission_id: int,
+    worker_owner_token: str | None = None,
+) -> dict[str, Any]:
     ensure_deliverable_table()
 
     mission = _get_mission(mission_id)
@@ -313,6 +317,14 @@ Rules:
         conn = get_connection()
 
         try:
+            conn.execute("BEGIN IMMEDIATE")
+
+            _assert_terminal_worker_ownership(
+                conn,
+                mission_id,
+                worker_owner_token,
+            )
+
             conn.execute(
                 """
                 INSERT INTO mission_deliverables
