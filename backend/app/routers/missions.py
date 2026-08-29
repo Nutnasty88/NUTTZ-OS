@@ -696,18 +696,25 @@ def execute_mission_task(mission_id: int):
 
 @router.post("/{mission_id}/deliverable")
 def generate_mission_deliverable(mission_id: int):
-    try:
-        deliverable = create_deliverable(mission_id)
-    except ValueError as error:
-        raise HTTPException(
-            status_code=400,
-            detail=str(error),
-        ) from error
-    except Exception as error:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Reporter Agent failed: {error}",
-        ) from error
+    deliverable = get_deliverable(mission_id)
+
+    if not (
+        deliverable
+        and deliverable.get("status") == "Ready"
+        and deliverable.get("content", "").strip()
+    ):
+        try:
+            deliverable = create_deliverable(mission_id)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400,
+                detail=str(error),
+            ) from error
+        except Exception as error:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Reporter Agent failed: {error}",
+            ) from error
 
     try:
         finalize_mission_completion(
