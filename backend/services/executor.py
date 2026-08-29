@@ -1937,6 +1937,8 @@ def _complete_builder_task(
         entrypoint = builder_result.get("entrypoint")
 
         auto_execution = None
+        auto_repair = None
+        initial_auto_execution = None
         manifest_result = None
         auto_run_skipped_reason = ""
 
@@ -1995,9 +1997,6 @@ def _complete_builder_task(
                     mission_id,
                     entrypoint,
                 )
-
-                auto_repair = None
-                initial_auto_execution = None
 
                 if (
                     not auto_execution.get("verified")
@@ -2804,6 +2803,155 @@ def reset_blocked_task(
         "progress": int(mission["progress"] or 0),
         "previous_evidence_preserved": bool(
             blocked_task["result"]
+        ),
+    }
+
+
+def reset_error_task(
+    mission_id: int,
+) -> dict[str, Any]:
+    """
+    Explicitly reset the first Error task to Pending.
+
+    Error recovery is operator-approved and refuses to modify a
+    mission while an active durable worker lease owns it.
+    """
+    ensure_task_table()
+
+    conn = get_connection()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        mission = conn.execute(
+            """
+            SELECT id, status, progress
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if mission is None:
+            raise ValueError(
+                f"Mission {mission_id} was not found."
+            )
+
+        lease = conn.execute(
+            """
+            SELECT expires_at
+            FROM mission_worker_leases
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if lease is not None:
+            try:
+                expires_at = datetime.fromisoformat(
+                    lease["expires_at"]
+                )
+                lease_active = expires_at > datetime.now(
+                    timezone.utc
+                )
+            except (TypeError, ValueError):
+                lease_active = False
+
+            if lease_active:
+                raise RuntimeError(
+                    f"Mission {mission_id} has an active worker "
+                    "lease and cannot reset an Error task."
+                )
+
+        error_task = conn.execute(
+            """
+            SELECT
+                id,
+                position,
+                title,
+                result
+            FROM mission_tasks
+            WHERE
+                mission_id=?
+                AND status='Error'
+            ORDER BY position ASC
+            LIMIT 1
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if error_task is None:
+            raise RuntimeError(
+                f"Mission {mission_id} has no Error task to reset."
+            )
+
+        cursor = conn.execute(
+            """
+            UPDATE mission_tasks
+            SET
+                status='Pending',
+                started_at=NULL,
+                completed_at=NULL,
+                execution_token=NULL
+            WHERE id=?
+              AND status='Error'
+            """,
+            (error_task["id"],),
+        )
+
+        if cursor.rowcount != 1:
+            raise RuntimeError(
+                f"Error task {error_task['id']} changed "
+                "before it could be reset."
+            )
+
+        cursor = conn.execute(
+            """
+            UPDATE missions
+            SET
+                status='Running',
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+              AND status='Error'
+            """,
+            (mission_id,),
+        )
+
+        if cursor.rowcount != 1:
+            raise RuntimeError(
+                f"Mission {mission_id} changed before its "
+                "Error task could be reset."
+            )
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+    log_event(
+        mission_id,
+        "Recovery",
+        "reset",
+        (
+            f'Task {error_task["position"]} was explicitly reset '
+            "from Error to Pending for operator-approved retry."
+        ),
+    )
+
+    return {
+        "mission_id": mission_id,
+        "task_id": error_task["id"],
+        "position": error_task["position"],
+        "title": error_task["title"],
+        "status": "Pending",
+        "mission_status": "Running",
+        "progress": int(mission["progress"] or 0),
+        "previous_result_preserved": bool(
+            error_task["result"]
         ),
     }
 

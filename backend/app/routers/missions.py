@@ -9,6 +9,7 @@ from services.executor import (
     get_tasks,
     interrupt_orphaned_running_task,
     reset_blocked_task,
+    reset_error_task,
     reset_interrupted_task,
     rollback_interrupted_task_reset,
     sync_tasks,
@@ -365,6 +366,50 @@ def reset_mission_blocked_task(mission_id: int):
         raise HTTPException(
             status_code=500,
             detail=f"Blocked-task reset failed: {error}",
+        ) from error
+
+    return {
+        "success": True,
+        "message": (
+            f'Task {reset["position"]} was reset to Pending.'
+        ),
+        "reset": reset,
+        "tasks": get_tasks(mission_id),
+    }
+
+
+@router.post("/{mission_id}/tasks/reset-error")
+def reset_mission_error_task(mission_id: int):
+    current_worker = get_worker_status()
+
+    if current_worker.get("thread_alive"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Pause the active Autonomous Worker before resetting "
+                "an Error task."
+            ),
+        )
+
+    try:
+        reset = reset_error_task(mission_id)
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=404,
+            detail=str(error),
+        ) from error
+
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error-task reset failed: {error}",
         ) from error
 
     return {
@@ -750,6 +795,7 @@ def get_mission_recovery_status(mission_id: int):
                     'Blocked',
                     'Interrupted',
                     'Running',
+                    'Error',
                     'Pending'
                 )
             ORDER BY
@@ -757,8 +803,9 @@ def get_mission_recovery_status(mission_id: int):
                     WHEN 'Blocked' THEN 1
                     WHEN 'Interrupted' THEN 2
                     WHEN 'Running' THEN 3
-                    WHEN 'Pending' THEN 4
-                    ELSE 5
+                    WHEN 'Error' THEN 4
+                    WHEN 'Pending' THEN 5
+                    ELSE 6
                 END,
                 position ASC
             LIMIT 1
@@ -848,6 +895,15 @@ def get_mission_recovery_status(mission_id: int):
         message = (
             "Execution was interrupted and requires "
             "operator-approved recovery."
+        )
+
+    elif task_status == "Error":
+        recovery_state = "error"
+        operator_action_required = True
+        can_resume = True
+        message = (
+            "Task execution failed and requires "
+            "operator-approved retry."
         )
 
     elif task_status == "Running":

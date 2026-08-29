@@ -2147,6 +2147,81 @@ export default function MissionQueue() {
   }
 
 
+  async function retryErrorTask(missionId) {
+    setWorkerActionMissionId(missionId);
+
+    setErrors((current) => ({
+      ...current,
+      [missionId]: "",
+    }));
+
+    try {
+      const resetResponse = await fetch(
+        `${API_BASE}/missions/${missionId}/tasks/reset-error`,
+        {
+          method: "POST",
+        },
+      );
+
+      const resetData = await resetResponse
+        .json()
+        .catch(() => ({}));
+
+      if (!resetResponse.ok) {
+        throw new Error(
+          resetData.detail || "Error task reset failed.",
+        );
+      }
+
+      const workerResponse = await fetch(
+        `${API_BASE}/missions/${missionId}/worker/start?delay_seconds=2`,
+        {
+          method: "POST",
+        },
+      );
+
+      const workerData = await workerResponse
+        .json()
+        .catch(() => ({}));
+
+      if (!workerResponse.ok) {
+        throw new Error(
+          workerData.detail ||
+            "Task was reset, but the worker failed to resume.",
+        );
+      }
+
+      setWorker(workerData.worker || EMPTY_WORKER);
+
+      setTasksByMission((current) => ({
+        ...current,
+        [missionId]: resetData.tasks || [],
+      }));
+
+      setOpenDetailsId(null);
+      setOpenPlanId(null);
+      setOpenResearchId(null);
+      setOpenDeliverableId(null);
+      setOpenWorkspaceId(null);
+      setOpenTasksId(missionId);
+
+      await loadRecoveryStatus(missionId).catch(() => {});
+      await loadMissions();
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        [missionId]: error.message,
+      }));
+
+      await loadTasks(missionId).catch(() => {});
+      await loadRecoveryStatus(missionId).catch(() => {});
+      await loadMissions();
+    } finally {
+      setWorkerActionMissionId(null);
+    }
+  }
+
+
   async function retryBlockedTask(missionId) {
     setWorkerActionMissionId(missionId);
 
@@ -2939,6 +3014,46 @@ export default function MissionQueue() {
                     : "View Report"}
                 </button>
               )}
+
+              {recoveryState === "error" && (
+                <button
+                  type="button"
+                  disabled={
+                    isWorkerAction ||
+                    worker.thread_alive ||
+                    recovery.lease?.active
+                  }
+                  onClick={() =>
+                    retryErrorTask(mission.id)
+                  }
+                  style={{
+                    padding: "7px 13px",
+                    background: isWorkerAction
+                      ? "#6b3d3d"
+                      : "#b84f4f",
+                    color: "white",
+                    border: "1px solid #df6a6a",
+                    borderRadius: "4px",
+                    cursor:
+                      isWorkerAction ||
+                      worker.thread_alive ||
+                      recovery.lease?.active
+                        ? "not-allowed"
+                        : "pointer",
+                    opacity:
+                      isWorkerAction ||
+                      worker.thread_alive ||
+                      recovery.lease?.active
+                        ? 0.6
+                        : 1,
+                  }}
+                >
+                  {isWorkerAction
+                    ? "Retrying task..."
+                    : "↻ Retry Error Task"}
+                </button>
+              )}
+
 
               {mission.status === "Blocked" && (
                 <button
