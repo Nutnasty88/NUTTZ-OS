@@ -696,6 +696,18 @@ def execute_mission_task(mission_id: int):
 
 @router.post("/{mission_id}/deliverable")
 def generate_mission_deliverable(mission_id: int):
+    lease = get_worker_lease(mission_id)
+
+    if lease and lease.get("active"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Mission {mission_id} has an active Autonomous Worker "
+                "lease. Wait for or stop the active worker before "
+                "generating the final deliverable manually."
+            ),
+        )
+
     deliverable = get_deliverable(mission_id)
 
     if not (
