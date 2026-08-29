@@ -3512,6 +3512,7 @@ def recover_interrupted_tasks() -> dict[str, Any]:
 def finalize_mission_completion(
     mission_id: int,
     required_status: str | None = None,
+    worker_owner_token: str | None = None,
 ) -> dict[str, Any]:
     """
     Atomically complete a mission only if its current persisted task
@@ -3528,6 +3529,12 @@ def finalize_mission_completion(
 
     try:
         conn.execute("BEGIN IMMEDIATE")
+
+        _assert_terminal_worker_ownership(
+            conn,
+            mission_id,
+            worker_owner_token,
+        )
 
         mission = conn.execute(
             """

@@ -391,7 +391,10 @@ def _count_tasks(tasks: list[dict[str, Any]]) -> tuple[int, int]:
     return total, completed
 
 
-def _complete_mission(mission_id: int) -> None:
+def _complete_mission(
+    mission_id: int,
+    worker_owner_token: str | None = None,
+) -> None:
     """Finalize a verified mission and generate its deliverable."""
 
     log_event(
@@ -449,7 +452,10 @@ def _complete_mission(mission_id: int) -> None:
             "Reporter returned no final deliverable."
         )
 
-    finalize_mission_completion(mission_id)
+    finalize_mission_completion(
+        mission_id,
+        worker_owner_token=worker_owner_token,
+    )
 
     log_event(
         mission_id,
@@ -547,7 +553,10 @@ def _run_worker(
 
             if not pending_tasks:
                 if completed == total:
-                    _complete_mission(mission_id)
+                    _complete_mission(
+                        mission_id,
+                        worker_owner_token=owner_token,
+                    )
 
                     _update_state(
                         status="Completed",
