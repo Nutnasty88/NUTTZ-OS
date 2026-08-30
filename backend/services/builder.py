@@ -791,6 +791,18 @@ Rules:
 - Never create, modify, or return nuttz-project.json.
 - Return complete replacement contents, not patches.
 - Change only files needed to correct the verified failure.
+- A repair is not correct merely because the exception is removed or
+  the program exits successfully.
+- The repaired project must continue to satisfy the ORIGINAL TASK
+  INSTRUCTIONS supplied by NUTTZ-OS.
+- Treat explicit outputs, exact text, values, filenames, behavior, and
+  other requirements in the original task instructions as acceptance
+  criteria for the repair.
+- If the original task requires exact stdout or exact text, preserve
+  that requirement exactly.
+- Do not replace broken behavior with arbitrary placeholder, example,
+  dummy, or hard-coded values merely to obtain exit code 0 unless that
+  exact value is required by the original task.
 - Treat stdout, stderr, traceback, exit code and timeout data as
   factual evidence.
 - Use traceback/module information to identify which existing project
