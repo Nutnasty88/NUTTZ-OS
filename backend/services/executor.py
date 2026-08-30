@@ -339,6 +339,121 @@ PYTHON_ARTIFACT_PATTERN = re.compile(
 )
 
 
+EXACT_STDOUT_PATTERNS = (
+    re.compile(
+        r"""
+        \b(?:prints?|outputs?)\s+exactly\s+
+        (?P<quote>["']?)
+        (?P<expected>[^\r\n"'`]+?)
+        (?P=quote)
+        (?=\s*(?:[.!?]|$))
+        """,
+        flags=re.IGNORECASE | re.VERBOSE,
+    ),
+    re.compile(
+        r"""
+        \bstdout\s+(?:must\s+)?(?:equal|equals|be)\s+
+        (?P<quote>["']?)
+        (?P<expected>[^\r\n"'`]+?)
+        (?P=quote)
+        (?=\s*(?:[.!?]|$))
+        """,
+        flags=re.IGNORECASE | re.VERBOSE,
+    ),
+    re.compile(
+        r"""
+        \bstdout\s+exactly\s*:?\s*
+        (?P<quote>["']?)
+        (?P<expected>[^\r\n"'`]+?)
+        (?P=quote)
+        (?=\s*(?:[.!?]|$))
+        """,
+        flags=re.IGNORECASE | re.VERBOSE,
+    ),
+    re.compile(
+        r"""
+        \boutput\s+exactly\s*:?\s*
+        (?P<quote>["']?)
+        (?P<expected>[^\r\n"'`]+?)
+        (?P=quote)
+        (?=\s*(?:[.!?]|$))
+        """,
+        flags=re.IGNORECASE | re.VERBOSE,
+    ),
+)
+
+
+def _exact_stdout_requirement(
+    task: Any,
+) -> str | None:
+    """
+    Extract one explicit exact-stdout acceptance requirement.
+
+    This intentionally recognizes only narrow, deterministic wording.
+    Ambiguous task language is not converted into an acceptance rule.
+    """
+    task_text = (
+        f"{task['title']}\n"
+        f"{task['instructions']}"
+    )
+
+    for pattern in EXACT_STDOUT_PATTERNS:
+        match = pattern.search(task_text)
+
+        if not match:
+            continue
+
+        expected = match.group("expected").strip()
+
+        if expected:
+            return expected
+
+    return None
+
+
+def _evaluate_execution_acceptance(
+    task: Any,
+    execution_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Evaluate deterministic task acceptance criteria against factual
+    Workspace Executor evidence.
+    """
+    expected_stdout = _exact_stdout_requirement(task)
+
+    if expected_stdout is None:
+        return {
+            "applicable": False,
+            "verified": None,
+            "type": None,
+            "reason": (
+                "No deterministic exact-stdout acceptance criterion "
+                "was found in the task."
+            ),
+        }
+
+    actual_stdout = execution_evidence.get("stdout", "")
+
+    if not isinstance(actual_stdout, str):
+        actual_stdout = str(actual_stdout)
+
+    actual_stdout = actual_stdout.strip()
+    verified = actual_stdout == expected_stdout
+
+    return {
+        "applicable": True,
+        "verified": verified,
+        "type": "exact_stdout",
+        "expected": expected_stdout,
+        "actual": actual_stdout,
+        "reason": (
+            "Exact stdout matched the task requirement."
+            if verified
+            else "Exact stdout did not match the task requirement."
+        ),
+    }
+
+
 def _is_workspace_execution_task(task: Any) -> bool:
     """Detect explicit requests to execute a Python Builder artifact."""
     task_text = (
@@ -577,6 +692,7 @@ def _repair_history_fingerprint(
     outcome: str,
     repair_evidence: dict[str, Any],
     final_execution: dict[str, Any],
+    acceptance_evidence: dict[str, Any],
     rollback_evidence: dict[str, Any],
 ) -> str:
     """
@@ -594,6 +710,7 @@ def _repair_history_fingerprint(
         "outcome": outcome,
         "repair_evidence": repair_evidence,
         "final_execution": final_execution,
+        "acceptance_evidence": acceptance_evidence,
         "rollback_evidence": rollback_evidence,
     }
 
@@ -618,6 +735,7 @@ def record_repair_history(
     confidence: dict[str, Any] | None,
     outcome: str = "verified",
     rollback_evidence: dict[str, Any] | None = None,
+    acceptance_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Persist one independently verified Builder repair attempt.
@@ -638,6 +756,9 @@ def record_repair_history(
 
     if not isinstance(rollback_evidence, dict):
         rollback_evidence = {}
+
+    if not isinstance(acceptance_evidence, dict):
+        acceptance_evidence = {}
 
     allowed_outcomes = {
         "verified",
@@ -688,9 +809,19 @@ def record_repair_history(
         ),
     )
 
-    verified = (
+    execution_verified = (
         final_execution.get("verified") is True
         and final_execution.get("exit_code") == 0
+    )
+
+    acceptance_failed = (
+        acceptance_evidence.get("applicable") is True
+        and acceptance_evidence.get("verified") is not True
+    )
+
+    verified = (
+        execution_verified
+        and not acceptance_failed
     )
 
     rollback_restored = (
@@ -745,6 +876,7 @@ def record_repair_history(
         outcome=outcome,
         repair_evidence=repair_evidence,
         final_execution=final_execution,
+        acceptance_evidence=acceptance_evidence,
         rollback_evidence=rollback_evidence,
     )
 
@@ -1030,6 +1162,7 @@ def get_repair_history(
 def _repair_confidence(
     repair_result: dict[str, Any] | None,
     final_execution: dict[str, Any],
+    acceptance_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """
     Score confidence in a Builder repair using only verified repair and
@@ -1039,6 +1172,9 @@ def _repair_confidence(
     """
     if not repair_result:
         return None
+
+    if not isinstance(acceptance_evidence, dict):
+        acceptance_evidence = {}
 
     repair_evidence = repair_result.get("evidence", {})
 
@@ -1078,9 +1214,19 @@ def _repair_confidence(
         "traceback_primary_target"
     )
 
-    final_verified = (
+    execution_verified = (
         final_execution.get("verified") is True
         and final_execution.get("exit_code") == 0
+    )
+
+    acceptance_failed = (
+        acceptance_evidence.get("applicable") is True
+        and acceptance_evidence.get("verified") is not True
+    )
+
+    final_verified = (
+        execution_verified
+        and not acceptance_failed
     )
 
     score = 60 if final_verified else 0
@@ -1089,7 +1235,13 @@ def _repair_confidence(
 
     if final_verified:
         reasons.append(
-            "Repaired project passed independent execution verification."
+            "Repaired project passed final execution and acceptance "
+            "verification."
+        )
+    elif acceptance_failed:
+        deductions.append(
+            "Repaired project passed execution but failed deterministic "
+            "task acceptance."
         )
     else:
         deductions.append(
@@ -1432,10 +1584,22 @@ def _complete_workspace_execution_task(
                 artifact_path,
             )
 
-        if (
+        acceptance = _evaluate_execution_acceptance(
+            task,
+            evidence,
+        )
+
+        execution_failed = (
             not evidence.get("verified")
             or evidence.get("exit_code") != 0
-        ):
+        )
+
+        acceptance_failed = (
+            acceptance.get("applicable") is True
+            and acceptance.get("verified") is not True
+        )
+
+        if execution_failed or acceptance_failed:
             rollback_result = None
 
             if repair_result:
@@ -1448,6 +1612,7 @@ def _complete_workspace_execution_task(
                 failed_confidence = _repair_confidence(
                     repair_result,
                     evidence,
+                    acceptance,
                 )
 
                 failed_outcome = (
@@ -1465,6 +1630,7 @@ def _complete_workspace_execution_task(
                     failed_confidence,
                     outcome=failed_outcome,
                     rollback_evidence=rollback_result,
+                    acceptance_evidence=acceptance,
                 )
 
                 if failed_history.get("created") is True:
@@ -1480,9 +1646,19 @@ def _complete_workspace_execution_task(
                         ),
                     )
 
+            failure_message = (
+                "Workspace artifact failed deterministic task "
+                "acceptance."
+                if acceptance_failed
+                else (
+                    "Workspace artifact failed execution after one "
+                    "automatic Builder repair attempt."
+                )
+            )
+
             raise RuntimeError(
-                "Workspace artifact failed execution after one "
-                "automatic Builder repair attempt.\n\n"
+                failure_message
+                + "\n\n"
                 + json.dumps(
                     {
                         "initial_execution": initial_evidence,
@@ -1490,6 +1666,7 @@ def _complete_workspace_execution_task(
                             repair_result
                         ),
                         "final_execution": evidence,
+                        "acceptance": acceptance,
                         "rollback": rollback_result,
                     },
                     indent=2,
@@ -1528,6 +1705,7 @@ def _complete_workspace_execution_task(
         repair_confidence = _repair_confidence(
             repair_result,
             evidence,
+            acceptance,
         )
 
         repair_history = None
@@ -1545,6 +1723,7 @@ def _complete_workspace_execution_task(
                 repair_result,
                 evidence,
                 repair_confidence,
+                acceptance_evidence=acceptance,
             )
 
             if repair_history.get("created") is True:
@@ -1596,6 +1775,12 @@ def _complete_workspace_execution_task(
             "\n\nVERIFIED EXECUTION EVIDENCE:\n"
             + json.dumps(
                 evidence,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n\nDETERMINISTIC ACCEPTANCE EVIDENCE:\n"
+            + json.dumps(
+                acceptance,
                 indent=2,
                 sort_keys=True,
             )
@@ -2041,9 +2226,24 @@ def _complete_builder_task(
                         entrypoint,
                     )
 
-                if (
+                auto_acceptance = _evaluate_execution_acceptance(
+                    task,
+                    auto_execution,
+                )
+
+                auto_execution_failed = (
                     not auto_execution.get("verified")
                     or auto_execution.get("exit_code") != 0
+                )
+
+                auto_acceptance_failed = (
+                    auto_acceptance.get("applicable") is True
+                    and auto_acceptance.get("verified") is not True
+                )
+
+                if (
+                    auto_execution_failed
+                    or auto_acceptance_failed
                 ):
                     rollback_result = None
 
@@ -2059,6 +2259,7 @@ def _complete_builder_task(
                         failed_confidence = _repair_confidence(
                             auto_repair,
                             auto_execution,
+                            auto_acceptance,
                         )
 
                         failed_outcome = (
@@ -2076,6 +2277,7 @@ def _complete_builder_task(
                             failed_confidence,
                             outcome=failed_outcome,
                             rollback_evidence=rollback_result,
+                            acceptance_evidence=auto_acceptance,
                         )
 
                         if failed_history.get("created") is True:
@@ -2091,10 +2293,19 @@ def _complete_builder_task(
                                 ),
                             )
 
+                    failure_message = (
+                        "Automatic Builder project failed "
+                        "deterministic task acceptance."
+                        if auto_acceptance_failed
+                        else (
+                            "Automatic Builder project verification "
+                            "failed after one automatic repair attempt."
+                        )
+                    )
+
                     raise RuntimeError(
-                        "Automatic Builder project verification failed "
-                        "after one automatic repair attempt."
-                        "\n\n"
+                        failure_message
+                        + "\n\n"
                         + json.dumps(
                             {
                                 "initial_execution":
@@ -2104,6 +2315,7 @@ def _complete_builder_task(
                                         auto_repair
                                     ),
                                 "final_execution": auto_execution,
+                                "acceptance": auto_acceptance,
                                 "rollback": rollback_result,
                             },
                             indent=2,
@@ -2155,6 +2367,7 @@ def _complete_builder_task(
         auto_repair_confidence = _repair_confidence(
             auto_repair,
             auto_execution or {},
+            auto_acceptance if auto_execution else None,
         )
 
         auto_repair_history = None
@@ -2173,6 +2386,7 @@ def _complete_builder_task(
                 auto_repair,
                 auto_execution,
                 auto_repair_confidence,
+                acceptance_evidence=auto_acceptance,
             )
 
             if auto_repair_history.get("created") is True:
@@ -2243,6 +2457,12 @@ def _complete_builder_task(
                 "\nVERIFIED AUTO EXECUTION EVIDENCE:\n"
                 + json.dumps(
                     auto_execution,
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n\nDETERMINISTIC ACCEPTANCE EVIDENCE:\n"
+                + json.dumps(
+                    auto_acceptance,
                     indent=2,
                     sort_keys=True,
                 )
