@@ -13,7 +13,7 @@ from services.workspace_manager import (
 )
 
 
-BUILDER_MODEL = "qwen3:8b"
+BUILDER_MODEL = "hf.co/RootMonsteR/Qwen3-14B-Abliterated-GGUF:Q4_K_M"
 
 MAX_BUILDER_FILES = 20
 
@@ -74,6 +74,22 @@ def _parse_builder_response(
     content: str,
 ) -> dict[str, Any]:
     cleaned = _strip_code_fence(content)
+
+    # Some Qwen GGUF variants may emit an orphan think wrapper even
+    # when reasoning is disabled. Strip only boundary think tags;
+    # arbitrary non-JSON prose must still fail validation.
+    cleaned = re.sub(
+        r"^(?:\s*</?think>\s*)+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"(?:\s*</?think>\s*)+$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
 
     try:
         payload = json.loads(cleaned)
@@ -397,6 +413,8 @@ Rules:
 """.strip()
 
         user_prompt = f"""
+/no_think
+
 Mission ID: {mission_id}
 Mission title: {mission_title}
 
@@ -789,6 +807,8 @@ Rules:
     )
 
     user_prompt = f"""
+/no_think
+
 Mission ID: {mission_id}
 Mission title: {mission_title}
 
