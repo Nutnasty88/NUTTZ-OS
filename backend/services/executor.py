@@ -1468,14 +1468,12 @@ def _assert_terminal_worker_ownership(
     worker_owner_token: str | None,
 ) -> None:
     """
-    Reject autonomous terminal transitions after worker lease loss.
+    Fence terminal transitions against conflicting worker ownership.
 
-    Manual execution has no worker owner token. Its task ownership is
-    protected by the Running-task / worker-lease interlock.
+    Worker-owned transitions require the exact active lease token.
+    Tokenless manual transitions are allowed only when no active
+    worker lease owns the mission.
     """
-    if worker_owner_token is None:
-        return
-
     lease = conn.execute(
         """
         SELECT
@@ -1486,6 +1484,27 @@ def _assert_terminal_worker_ownership(
         """,
         (mission_id,),
     ).fetchone()
+
+    if worker_owner_token is None:
+        if lease is None:
+            return
+
+        try:
+            expires_at = datetime.fromisoformat(
+                lease["expires_at"]
+            )
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(
+                f"Mission {mission_id} worker lease expiry is invalid."
+            ) from error
+
+        if expires_at > datetime.now(timezone.utc):
+            raise RuntimeError(
+                f"Mission {mission_id} acquired an active worker "
+                "lease before the manual terminal transition."
+            )
+
+        return
 
     if lease is None:
         raise RuntimeError(
