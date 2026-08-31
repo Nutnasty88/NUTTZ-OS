@@ -225,9 +225,18 @@ def renew_worker_lease(
                 "by another worker."
             )
 
-        current_expiry = datetime.fromisoformat(
-            lease["expires_at"]
-        )
+        try:
+            current_expiry = datetime.fromisoformat(
+                lease["expires_at"]
+            )
+        except (TypeError, ValueError) as error:
+            conn.rollback()
+
+            raise RuntimeError(
+                f"Mission {mission_id} worker lease expiry "
+                "is invalid and worker ownership cannot "
+                "be safely renewed."
+            ) from error
 
         if current_expiry <= now:
             conn.rollback()
