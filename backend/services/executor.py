@@ -3643,6 +3643,8 @@ def recover_interrupted_tasks() -> dict[str, Any]:
     conn = get_connection()
 
     try:
+        conn.execute("BEGIN IMMEDIATE")
+
         lease_table_exists = conn.execute(
             """
             SELECT 1
@@ -3693,12 +3695,6 @@ def recover_interrupted_tasks() -> dict[str, Any]:
                         active_lease["expires_at"]
                     )
                 except (TypeError, ValueError):
-                    expires_at = None
-
-                if (
-                    expires_at is not None
-                    and expires_at > now
-                ):
                     protected.append(
                         {
                             "task_id": task["id"],
@@ -3708,6 +3704,27 @@ def recover_interrupted_tasks() -> dict[str, Any]:
                             "started_at": task["started_at"],
                             "lease_expires_at": (
                                 active_lease["expires_at"]
+                            ),
+                            "protection_reason": (
+                                "invalid_worker_lease_expiry"
+                            ),
+                        }
+                    )
+                    continue
+
+                if expires_at > now:
+                    protected.append(
+                        {
+                            "task_id": task["id"],
+                            "mission_id": task["mission_id"],
+                            "position": task["position"],
+                            "title": task["title"],
+                            "started_at": task["started_at"],
+                            "lease_expires_at": (
+                                active_lease["expires_at"]
+                            ),
+                            "protection_reason": (
+                                "active_worker_lease"
                             ),
                         }
                     )
