@@ -1925,15 +1925,14 @@ def _complete_workspace_execution_task(
         total = counts["total"] or 1
         completed = counts["completed"] or 0
 
-        progress = 20 + int(
-            (completed / total) * 80
-        )
+        if completed == total:
+            progress = 99
+        else:
+            progress = 20 + int(
+                (completed / total) * 80
+            )
 
-        mission_status = (
-            "Completed"
-            if completed == total
-            else "Running"
-        )
+        mission_status = "Running"
 
         conn.execute(
             """
@@ -2620,15 +2619,14 @@ def _complete_builder_task(
         total = counts["total"] or 1
         completed = counts["completed"] or 0
 
-        progress = 20 + int(
-            (completed / total) * 80
-        )
+        if completed == total:
+            progress = 99
+        else:
+            progress = 20 + int(
+                (completed / total) * 80
+            )
 
-        mission_status = (
-            "Completed"
-            if completed == total
-            else "Running"
-        )
+        mission_status = "Running"
 
         conn.execute(
             """
@@ -3939,6 +3937,29 @@ def finalize_mission_completion(
                 f"completed ({completed_tasks}/{total_tasks})."
             )
 
+        deliverable = conn.execute(
+            """
+            SELECT
+                status,
+                content
+            FROM mission_deliverables
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if (
+            deliverable is None
+            or deliverable["status"] != "Ready"
+            or not str(deliverable["content"] or "").strip()
+        ):
+            conn.rollback()
+            raise RuntimeError(
+                f"Mission {mission_id} completion was rejected "
+                "because a Ready, non-empty final deliverable "
+                "is required."
+            )
+
         cursor = conn.execute(
             """
             UPDATE missions
@@ -4111,22 +4132,12 @@ def execute_next_task(
             completed = counts["completed"] or 0
 
             if total > 0 and completed == total:
-                status = "Completed"
-                progress = 100
-                message = "All mission tasks are complete."
-
-                conn.execute(
-                    """
-                    UPDATE missions
-                    SET
-                        status='Completed',
-                        progress=100,
-                        updated_at=CURRENT_TIMESTAMP
-                    WHERE id=?
-                    """,
-                    (mission_id,),
+                status = "Tasks Completed"
+                progress = int(mission["progress"] or 0)
+                message = (
+                    "All mission tasks are complete. "
+                    "Final deliverable is still required."
                 )
-                conn.commit()
             else:
                 status = "Incomplete"
                 progress = int(mission["progress"] or 0)
@@ -4402,13 +4413,13 @@ Task instructions:
 
         total = counts["total"] or 1
         completed = counts["completed"] or 0
-        progress = 20 + int((completed / total) * 80)
 
-        mission_status = (
-            "Completed"
-            if completed == total
-            else "Running"
-        )
+        if completed == total:
+            progress = 99
+        else:
+            progress = 20 + int((completed / total) * 80)
+
+        mission_status = "Running"
 
         conn.execute(
             """
