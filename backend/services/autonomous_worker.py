@@ -335,12 +335,18 @@ def get_worker_lease(
             lease["expires_at"]
         )
         active = expires_at > now
+        valid = True
+        error = ""
     except (TypeError, ValueError):
         active = False
+        valid = False
+        error = "invalid_worker_lease_expiry"
 
     return {
         "mission_id": lease["mission_id"],
         "active": active,
+        "valid": valid,
+        "error": error,
         "acquired_at": lease["acquired_at"],
         "heartbeat_at": lease["heartbeat_at"],
         "expires_at": lease["expires_at"],

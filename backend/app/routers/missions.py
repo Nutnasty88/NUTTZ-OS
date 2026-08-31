@@ -569,6 +569,15 @@ def resume_mission_recovery(
 
     lease = get_worker_lease(mission_id)
 
+    if lease and lease.get("valid") is False:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Mission {mission_id} has invalid worker lease "
+                "metadata and recovery cannot proceed safely."
+            ),
+        )
+
     if lease and lease.get("active"):
         raise HTTPException(
             status_code=409,
@@ -664,6 +673,15 @@ def resume_mission_recovery(
 def execute_mission_task(mission_id: int):
     lease = get_worker_lease(mission_id)
 
+    if lease and lease.get("valid") is False:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Mission {mission_id} has invalid worker lease "
+                "metadata. Manual task execution is not allowed."
+            ),
+        )
+
     if lease and lease.get("active"):
         raise HTTPException(
             status_code=409,
@@ -697,6 +715,16 @@ def execute_mission_task(mission_id: int):
 @router.post("/{mission_id}/deliverable")
 def generate_mission_deliverable(mission_id: int):
     lease = get_worker_lease(mission_id)
+
+    if lease and lease.get("valid") is False:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Mission {mission_id} has invalid worker lease "
+                "metadata. Final deliverable generation cannot "
+                "proceed safely."
+            ),
+        )
 
     if lease and lease.get("active"):
         raise HTTPException(
