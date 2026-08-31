@@ -4001,8 +4001,14 @@ def execute_next_task(
                     lease["expires_at"]
                 )
                 active_lease = lease_expires_at > now
-            except (TypeError, ValueError):
-                active_lease = False
+            except (TypeError, ValueError) as error:
+                conn.rollback()
+
+                raise RuntimeError(
+                    f"Mission {mission_id} worker lease expiry "
+                    "is invalid and task execution cannot "
+                    "be safely claimed."
+                ) from error
 
         if worker_owner_token is None:
             if active_lease:
