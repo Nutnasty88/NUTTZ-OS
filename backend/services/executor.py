@@ -3341,6 +3341,14 @@ def rollback_interrupted_task_reset(
     conn = get_connection()
 
     try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        _assert_terminal_worker_ownership(
+            conn,
+            mission_id,
+            None,
+        )
+
         mission = conn.execute(
             """
             SELECT id, progress
