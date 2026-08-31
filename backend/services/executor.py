@@ -3531,15 +3531,18 @@ def interrupt_orphaned_running_task(
                     expires_at = datetime.fromisoformat(
                         lease["expires_at"]
                     )
-                except (TypeError, ValueError):
-                    expires_at = None
+                except (TypeError, ValueError) as error:
+                    conn.rollback()
+
+                    raise RuntimeError(
+                        f"Mission {mission_id} worker lease expiry "
+                        "is invalid and orphan recovery cannot "
+                        "safely determine ownership."
+                    ) from error
 
                 now = datetime.now(timezone.utc)
 
-                if (
-                    expires_at is not None
-                    and expires_at > now
-                ):
+                if expires_at > now:
                     conn.rollback()
 
                     raise RuntimeError(
