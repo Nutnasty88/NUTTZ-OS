@@ -85,9 +85,18 @@ def acquire_worker_lease(
         ).fetchone()
 
         if existing is not None:
-            existing_expiry = datetime.fromisoformat(
-                existing["expires_at"]
-            )
+            try:
+                existing_expiry = datetime.fromisoformat(
+                    existing["expires_at"]
+                )
+            except (TypeError, ValueError) as error:
+                conn.rollback()
+
+                raise RuntimeError(
+                    f"Mission {mission_id} worker lease expiry "
+                    "is invalid and worker ownership cannot "
+                    "be safely acquired."
+                ) from error
 
             if existing_expiry > now:
                 conn.rollback()
