@@ -3101,8 +3101,14 @@ def reset_error_task(
                 lease_active = expires_at > datetime.now(
                     timezone.utc
                 )
-            except (TypeError, ValueError):
-                lease_active = False
+            except (TypeError, ValueError) as error:
+                conn.rollback()
+
+                raise RuntimeError(
+                    f"Mission {mission_id} worker lease expiry "
+                    "is invalid and the Error task cannot "
+                    "be safely reset."
+                ) from error
 
             if lease_active:
                 raise RuntimeError(
