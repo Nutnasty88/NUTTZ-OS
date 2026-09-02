@@ -1,0 +1,119 @@
+import sqlite3
+
+from services.executor import (
+    _controlled_workspace_arguments,
+    _controlled_workspace_stdin,
+    _evaluate_execution_acceptance,
+    _evidence_requirement,
+    _exact_stdout_requirement,
+)
+
+
+def test_extracts_exact_stdout_and_controlled_stdin():
+    task = {
+        "title": "Test Script Execution",
+        "instructions": (
+            'Input a name and verify output matches '
+            '"Hello, NAME!".'
+        ),
+    }
+
+    assert _exact_stdout_requirement(task) == "Hello, NAME!"
+    assert _controlled_workspace_stdin(task) == "NAME\n"
+
+
+def test_extracts_arguments_from_sample_command():
+    task = {
+        "title": "Test Execution",
+        "instructions": (
+            "Run the script with a sample name, e.g., "
+            "`python hello.py Alice`."
+        ),
+    }
+
+    assert _controlled_workspace_arguments(
+        task,
+        "hello.py",
+    ) == ["Alice"]
+
+
+def test_derives_argument_from_exact_greeting():
+    task = {
+        "title": "Verify Output",
+        "instructions": (
+            "Confirm the output is exactly "
+            "`Hello, Alice!` with no extra text when "
+            "provided with a name."
+        ),
+    }
+
+    assert _exact_stdout_requirement(task) == "Hello, Alice!"
+    assert _controlled_workspace_arguments(
+        task,
+        "hello.py",
+    ) == ["Alice"]
+
+
+def test_exact_stdout_acceptance_matches_execution():
+    task = {
+        "title": "Verify Output",
+        "instructions": (
+            "Confirm the output is exactly "
+            "`Hello, Alice!` with no extra text."
+        ),
+    }
+
+    acceptance = _evaluate_execution_acceptance(
+        task,
+        {
+            "stdout": "Hello, Alice!\n",
+        },
+    )
+
+    assert acceptance == {
+        "applicable": True,
+        "verified": True,
+        "type": "exact_stdout",
+        "expected": "Hello, Alice!",
+        "actual": "Hello, Alice!",
+        "reason": "Exact stdout matched the task requirement.",
+    }
+
+
+def test_sqlite_row_allows_safe_installation_verification():
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+
+    try:
+        task = connection.execute(
+            """
+            SELECT
+                'Install Python' AS title,
+                ': Ensure Python is installed on the system.'
+                    AS instructions
+            """
+        ).fetchone()
+    finally:
+        connection.close()
+
+    requirement, allowed = _evidence_requirement(task)
+
+    assert allowed is True
+    assert "allowlisted local diagnostic" in requirement
+
+
+def test_explicit_installation_remains_blocked():
+    task = {
+        "title": "Install Python",
+        "instructions": (
+            "Install Python using the system package manager."
+        ),
+    }
+
+    requirement, allowed = _evidence_requirement(task)
+
+    assert allowed is False
+    assert requirement == (
+        "System-changing work requires an approved "
+        "execution tool result."
+    )
