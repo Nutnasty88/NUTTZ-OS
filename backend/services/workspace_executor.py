@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -24,11 +26,22 @@ EXECUTION_TIMEOUT_SECONDS: Final = 15
 
 OUTPUT_LIMIT: Final = 6000
 
+STDIN_LIMIT_BYTES: Final = 4096
+
+ARGUMENT_COUNT_LIMIT: Final = 8
+ARGUMENT_BYTES_LIMIT: Final = 512
+
+SAFE_ARGUMENT_PATTERN: Final = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+)
+
 PYTHON_WORKSPACE_BOOTSTRAP: Final = (
     "import runpy, sys; "
     "entrypoint = sys.argv[1]; "
     "import_root = sys.argv[2]; "
+    "artifact_arguments = sys.argv[3:]; "
     "sys.path.insert(0, import_root); "
+    "sys.argv = [entrypoint, *artifact_arguments]; "
     "runpy.run_path(entrypoint, run_name='__main__')"
 )
 
@@ -74,6 +87,52 @@ def _limit_output(
         text[:available] + marker,
         True,
     )
+
+
+def _validate_controlled_arguments(
+    arguments: list[str] | None,
+) -> list[str]:
+    """Validate bounded arguments accepted by Workspace Executor."""
+    if arguments is None:
+        return []
+
+    if not isinstance(arguments, list):
+        raise WorkspaceExecutionError(
+            "Controlled arguments must be a list."
+        )
+
+    if len(arguments) > ARGUMENT_COUNT_LIMIT:
+        raise WorkspaceExecutionError(
+            "Controlled argument count exceeds the "
+            "Workspace Executor limit."
+        )
+
+    safe_arguments = []
+
+    for argument in arguments:
+        if (
+            not isinstance(argument, str)
+            or SAFE_ARGUMENT_PATTERN.fullmatch(argument) is None
+        ):
+            raise WorkspaceExecutionError(
+                "Controlled arguments may contain only bounded "
+                "letters, numbers, dots, underscores, and hyphens."
+            )
+
+        safe_arguments.append(argument)
+
+    argument_bytes = b"\x00".join(
+        argument.encode("utf-8")
+        for argument in safe_arguments
+    )
+
+    if len(argument_bytes) > ARGUMENT_BYTES_LIMIT:
+        raise WorkspaceExecutionError(
+            "Controlled arguments exceed the Workspace Executor "
+            "byte limit."
+        )
+
+    return safe_arguments
 
 
 def _resolve_workspace(
@@ -164,12 +223,19 @@ def _resolve_python_artifact(
 def execute_python_artifact(
     mission_id: int,
     relative_path: str,
+    *,
+    stdin_text: str | None = None,
+    arguments: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Execute one verified Python artifact inside its Builder workspace.
 
     This executor deliberately does not accept arbitrary command strings,
     shell syntax, arguments, absolute paths, or non-Python executables.
+
+    Optional stdin and positional arguments are bounded values supplied
+    by trusted NUTTZ-OS execution policy. Their contents are not included
+    directly in execution evidence.
     """
     workspace_name, target, artifact = (
         _resolve_python_artifact(
@@ -202,6 +268,25 @@ def execute_python_artifact(
         "PYTHONUNBUFFERED": "1",
     }
 
+    safe_arguments = _validate_controlled_arguments(
+        arguments
+    )
+
+    argument_bytes = b"\x00".join(
+        argument.encode("utf-8")
+        for argument in safe_arguments
+    )
+
+    argument_evidence = {
+        "arguments_supplied": bool(safe_arguments),
+        "argument_count": len(safe_arguments),
+        "arguments_sha256": (
+            hashlib.sha256(argument_bytes).hexdigest()
+            if safe_arguments
+            else None
+        ),
+    }
+
     command = [
         python_executable,
         "-I",
@@ -210,7 +295,46 @@ def execute_python_artifact(
         PYTHON_WORKSPACE_BOOTSTRAP,
         str(target),
         str(target.parent),
+        *safe_arguments,
     ]
+
+    evidence_command = list(command)
+
+    if safe_arguments:
+        evidence_command[-len(safe_arguments):] = [
+            "<controlled-argument>"
+            for _ in safe_arguments
+        ]
+
+    if stdin_text is not None:
+        if not isinstance(stdin_text, str):
+            raise WorkspaceExecutionError(
+                "Controlled stdin must be text."
+            )
+
+        if "\x00" in stdin_text:
+            raise WorkspaceExecutionError(
+                "Controlled stdin contains an invalid character."
+            )
+
+        stdin_bytes = stdin_text.encode("utf-8")
+
+        if len(stdin_bytes) > STDIN_LIMIT_BYTES:
+            raise WorkspaceExecutionError(
+                "Controlled stdin exceeds the Workspace Executor limit."
+            )
+    else:
+        stdin_bytes = b""
+
+    stdin_evidence = {
+        "stdin_supplied": stdin_text is not None,
+        "stdin_size_bytes": len(stdin_bytes),
+        "stdin_sha256": (
+            hashlib.sha256(stdin_bytes).hexdigest()
+            if stdin_text is not None
+            else None
+        ),
+    }
 
     started = time.monotonic()
 
@@ -220,7 +344,12 @@ def execute_python_artifact(
             shell=False,
             cwd=str(workspace),
             env=environment,
-            stdin=subprocess.DEVNULL,
+            stdin=(
+                subprocess.DEVNULL
+                if stdin_text is None
+                else None
+            ),
+            input=stdin_text,
             capture_output=True,
             text=True,
             timeout=EXECUTION_TIMEOUT_SECONDS,
@@ -253,8 +382,10 @@ def execute_python_artifact(
             "artifact": artifact["path"],
             "artifact_sha256": artifact["sha256"],
             "artifact_size_bytes": artifact["size_bytes"],
+            **stdin_evidence,
+            **argument_evidence,
             "interpreter": python_executable,
-            "command": command,
+            "command": evidence_command,
             "status": (
                 "success"
                 if verified
@@ -292,8 +423,10 @@ def execute_python_artifact(
             "artifact": artifact["path"],
             "artifact_sha256": artifact["sha256"],
             "artifact_size_bytes": artifact["size_bytes"],
+            **stdin_evidence,
+            **argument_evidence,
             "interpreter": python_executable,
-            "command": command,
+            "command": evidence_command,
             "status": "timeout",
             "exit_code": None,
             "duration_ms": duration_ms,
@@ -320,8 +453,10 @@ def execute_python_artifact(
             "artifact": artifact["path"],
             "artifact_sha256": artifact["sha256"],
             "artifact_size_bytes": artifact["size_bytes"],
+            **stdin_evidence,
+            **argument_evidence,
             "interpreter": python_executable,
-            "command": command,
+            "command": evidence_command,
             "status": "error",
             "exit_code": None,
             "duration_ms": duration_ms,
@@ -621,22 +756,37 @@ def launch_verified_project(
             "no longer matches the verified manifest."
         )
 
-    expected_run_command = [
+    run_command = manifest.get("run_command")
+
+    approved_run_prefix = [
         "python3",
         "-I",
         "-B",
         entrypoint,
     ]
 
-    if manifest.get("run_command") != expected_run_command:
+    if (
+        not isinstance(run_command, list)
+        or run_command[:4] != approved_run_prefix
+    ):
         raise WorkspaceExecutionError(
             "Project manifest run command is not an approved "
             "Workspace Executor command."
         )
 
+    try:
+        manifest_arguments = _validate_controlled_arguments(
+            run_command[4:]
+        )
+    except WorkspaceExecutionError as error:
+        raise WorkspaceExecutionError(
+            "Project manifest controlled arguments are invalid."
+        ) from error
+
     execution = execute_python_artifact(
         mission_id,
         entrypoint,
+        arguments=manifest_arguments,
     )
 
     return {

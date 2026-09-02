@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+import shlex
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -383,6 +384,69 @@ EXACT_STDOUT_PATTERNS = (
 )
 
 
+OUTPUT_MATCH_STDOUT_PATTERN = re.compile(
+    r"""
+    \boutput\s+(?:must\s+)?matches?\s+
+    (?P<quote>["'])
+    (?P<expected>[^\r\n"'`]+)
+    (?P=quote)
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
+CONTROLLED_NAME_STDIN_PATTERN = re.compile(
+    r"""
+    \b(?:input|enter|provide|supply)\s+
+    (?:(?:a|the)\s+)?
+    name\b
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
+OUTPUT_IS_EXACTLY_STDOUT_PATTERN = re.compile(
+    r"""
+    \boutput\s+(?:is\s+)?exactly\s+
+    (?P<quote>["'`])
+    (?P<expected>[^\r\n"'`]+)
+    (?P=quote)
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
+CONTROLLED_PYTHON_COMMAND_PATTERN = re.compile(
+    r"""
+    `
+    (?P<command>
+        (?:python|python3)
+        \s+
+        [A-Za-z0-9_.\-/]+\.py
+        (?:\s+[A-Za-z0-9_.-]+){1,8}
+    )
+    `
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
+SAFE_TASK_ARGUMENT_PATTERN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+)
+
+
+PROVIDED_NAME_PATTERN = re.compile(
+    r"\bprovided\s+with\s+a\s+name\b",
+    flags=re.IGNORECASE,
+)
+
+
+EXACT_GREETING_PATTERN = re.compile(
+    r"^Hello,\s+(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]{0,63})!$"
+)
+
+
 def _exact_stdout_requirement(
     task: Any,
 ) -> str | None:
@@ -397,7 +461,11 @@ def _exact_stdout_requirement(
         f"{task['instructions']}"
     )
 
-    for pattern in EXACT_STDOUT_PATTERNS:
+    for pattern in (
+        *EXACT_STDOUT_PATTERNS,
+        OUTPUT_MATCH_STDOUT_PATTERN,
+        OUTPUT_IS_EXACTLY_STDOUT_PATTERN,
+    ):
         match = pattern.search(task_text)
 
         if not match:
@@ -409,6 +477,119 @@ def _exact_stdout_requirement(
             return expected
 
     return None
+
+
+def _controlled_workspace_stdin(
+    task: Any,
+) -> str | None:
+    """
+    Return one narrow deterministic stdin fixture when a task explicitly
+    requests a name and defines exact stdout using the NAME placeholder.
+
+    Arbitrary model-generated stdin is never accepted here.
+    """
+    expected_stdout = _exact_stdout_requirement(task)
+
+    if expected_stdout is None:
+        return None
+
+    if re.search(
+        r"\bNAME\b",
+        expected_stdout,
+    ) is None:
+        return None
+
+    task_text = (
+        f"{task['title']}\n"
+        f"{task['instructions']}"
+    )
+
+    if CONTROLLED_NAME_STDIN_PATTERN.search(
+        task_text
+    ) is None:
+        return None
+
+    return "NAME\n"
+
+
+def _controlled_workspace_arguments(
+    task: Any,
+    artifact_path: str,
+) -> list[str] | None:
+    """
+    Extract bounded positional arguments from one explicit backticked
+    Python sample command.
+
+    This parser never executes or returns shell syntax. The Workspace
+    Executor independently validates every returned argument again.
+    """
+    task_text = (
+        f"{task['title']}\n"
+        f"{task['instructions']}"
+    )
+
+    artifact_name = artifact_path.rsplit(
+        "/",
+        maxsplit=1,
+    )[-1]
+
+    for match in CONTROLLED_PYTHON_COMMAND_PATTERN.finditer(
+        task_text
+    ):
+        try:
+            tokens = shlex.split(
+                match.group("command"),
+                posix=True,
+            )
+        except ValueError:
+            continue
+
+        if len(tokens) < 3:
+            continue
+
+        executable = tokens[0].lower()
+        command_artifact = tokens[1].rsplit(
+            "/",
+            maxsplit=1,
+        )[-1]
+
+        arguments = tokens[2:]
+
+        if executable not in {"python", "python3"}:
+            continue
+
+        if command_artifact != artifact_name:
+            continue
+
+        if not 1 <= len(arguments) <= 8:
+            continue
+
+        if not all(
+            SAFE_TASK_ARGUMENT_PATTERN.fullmatch(argument)
+            for argument in arguments
+        ):
+            continue
+
+        return arguments
+
+    expected_stdout = _exact_stdout_requirement(
+        task
+    )
+
+    if (
+        expected_stdout is None
+        or PROVIDED_NAME_PATTERN.search(task_text) is None
+    ):
+        return None
+
+    greeting_match = EXACT_GREETING_PATTERN.fullmatch(
+        expected_stdout
+    )
+
+    if greeting_match is None:
+        return None
+
+    return [greeting_match.group("name")]
 
 
 def _evaluate_execution_acceptance(
@@ -1555,25 +1736,120 @@ def _complete_workspace_execution_task(
         ),
     )
 
+    controlled_arguments = _controlled_workspace_arguments(
+        task,
+        artifact_path,
+    )
+
+    if controlled_arguments is not None:
+        log_event(
+            mission_id,
+            "Workspace Executor",
+            "argument_fixture",
+            (
+                f"Task {task['position']} is using "
+                f"{len(controlled_arguments)} bounded positional "
+                "argument fixture(s) for deterministic verification."
+            ),
+        )
+
+    controlled_stdin = _controlled_workspace_stdin(
+        task,
+    )
+
+    if controlled_stdin is not None:
+        log_event(
+            mission_id,
+            "Workspace Executor",
+            "stdin_fixture",
+            (
+                f"Task {task['position']} is using bounded "
+                "controlled stdin for deterministic CLI verification."
+            ),
+        )
+
     try:
         evidence = execute_python_artifact(
             mission_id,
             artifact_path,
+            stdin_text=controlled_stdin,
+            arguments=controlled_arguments,
         )
 
         repair_result = None
         initial_evidence = None
 
-        if not evidence.get("verified"):
-            initial_evidence = evidence
+        acceptance = _evaluate_execution_acceptance(
+            task,
+            evidence,
+        )
+
+        execution_failed = (
+            not evidence.get("verified")
+            or evidence.get("exit_code") != 0
+        )
+
+        acceptance_failed = (
+            acceptance.get("applicable") is True
+            and acceptance.get("verified") is not True
+        )
+
+        if execution_failed or acceptance_failed:
+            initial_evidence = dict(evidence)
+            initial_evidence["acceptance"] = acceptance
+
+            failure_details = []
+
+            if execution_failed:
+                stderr_excerpt = str(
+                    evidence.get("stderr", "")
+                ).strip()
+
+                if len(stderr_excerpt) > 400:
+                    stderr_excerpt = (
+                        stderr_excerpt[:400]
+                        + "...[truncated]"
+                    )
+
+                failure_details.append(
+                    "execution failed with exit code "
+                    f"{evidence.get('exit_code')}; "
+                    f"stderr={stderr_excerpt!r}"
+                )
+
+            if acceptance_failed:
+                expected_excerpt = str(
+                    acceptance.get("expected", "")
+                )[:240]
+
+                actual_excerpt = str(
+                    acceptance.get("actual", "")
+                )[:240]
+
+                failure_details.append(
+                    f"exact stdout expected "
+                    f"{expected_excerpt!r} but received "
+                    f"{actual_excerpt!r}"
+                )
+
+            log_event(
+                mission_id,
+                "Workspace Executor",
+                "verification_failed",
+                (
+                    f"Task {task['position']} verification evidence: "
+                    + " | ".join(failure_details)
+                ),
+            )
 
             log_event(
                 mission_id,
                 "Workspace Executor",
                 "repairing",
                 (
-                    f"Task {task['position']} execution failed. "
-                    "Builder is attempting one automatic repair."
+                    f"Task {task['position']} execution or "
+                    "exact-output verification failed. Builder is "
+                    "attempting one automatic repair."
                 ),
             )
 
@@ -1585,7 +1861,7 @@ def _complete_workspace_execution_task(
                 task_title=task["title"],
                 task_instructions=task["instructions"],
                 artifact_path=artifact_path,
-                execution_evidence=evidence,
+                execution_evidence=initial_evidence,
             )
 
             log_event(
@@ -1601,6 +1877,8 @@ def _complete_workspace_execution_task(
             evidence = execute_python_artifact(
                 mission_id,
                 artifact_path,
+                stdin_text=controlled_stdin,
+            arguments=controlled_arguments,
             )
 
         acceptance = _evaluate_execution_acceptance(
@@ -1703,6 +1981,7 @@ def _complete_workspace_execution_task(
                 "-I",
                 "-B",
                 evidence["artifact"],
+                *controlled_arguments,
             ],
             artifact_sha256=evidence["artifact_sha256"],
             artifact_size_bytes=evidence[
@@ -2742,6 +3021,67 @@ def _collect_safe_tool_results(task: Any) -> list[dict[str, Any]]:
     ]
 
 
+SAFE_TOOL_VERIFICATION_PATTERN = re.compile(
+    r"""
+    \b(?:ensure|confirm|verify|check)\b
+    .{0,160}
+    \b(?:installed|available|accessible|version)\b
+    """,
+    flags=re.IGNORECASE | re.DOTALL | re.VERBOSE,
+)
+
+
+EXPLICIT_MUTATION_PATTERN = re.compile(
+    r"""
+    \b(
+        install|
+        uninstall|
+        configure|
+        modify|
+        delete|
+        copy|
+        move|
+        deploy|
+        restart|
+        start|
+        stop|
+        execute|
+        run|
+        build|
+        implement
+    )\b
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _safe_tool_verification_only(
+    task: Any,
+) -> bool:
+    """
+    Permit an allowlisted diagnostic to verify existing software without
+    treating a misleading task title as authorization to modify the host.
+    """
+    if not _task_safe_tool_names(task):
+        return False
+
+    instructions = str(
+        task["instructions"]
+    )
+
+    if SAFE_TOOL_VERIFICATION_PATTERN.search(
+        instructions
+    ) is None:
+        return False
+
+    if EXPLICIT_MUTATION_PATTERN.search(
+        instructions
+    ) is not None:
+        return False
+
+    return True
+
+
 EVIDENCE_REQUIRED_RULES = (
     (
         "External research or source collection requires an approved "
@@ -2801,6 +3141,17 @@ def _evidence_requirement(task: Any) -> tuple[str, bool]:
     satisfy it.
     """
     task_text = f"{task['title']}\n{task['instructions']}"
+    safe_tool_names = _task_safe_tool_names(task)
+
+    if (
+        safe_tool_names
+        and _safe_tool_verification_only(task)
+    ):
+        return (
+            "An allowlisted local diagnostic can verify the existing "
+            "installation without changing the system.",
+            True,
+        )
 
     for reason, pattern in EVIDENCE_REQUIRED_RULES:
         if re.search(
@@ -2810,7 +3161,7 @@ def _evidence_requirement(task: Any) -> tuple[str, bool]:
         ):
             return reason, False
 
-    if _task_safe_tool_names(task):
+    if safe_tool_names:
         return (
             "The task requests an allowlisted local diagnostic.",
             True,
