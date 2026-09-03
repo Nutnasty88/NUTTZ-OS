@@ -428,6 +428,20 @@ DISPLAY_EXACTLY_STDOUT_PATTERN = re.compile(
 )
 
 
+OUTPUT_VALUE_EXACTLY_STDOUT_PATTERN = re.compile(
+    r"""
+    \boutputs?\s+
+    `?
+    (?P<quote>["'])
+    (?P<expected>[^\r\n"'`]+)
+    (?P=quote)
+    `?
+    \s+exactly\b
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
 CONTROLLED_PYTHON_COMMAND_PATTERN = re.compile(
     r"""
     `
@@ -449,7 +463,13 @@ SAFE_TASK_ARGUMENT_PATTERN = re.compile(
 
 
 PROVIDED_NAME_PATTERN = re.compile(
-    r"\bprovided\s+with\s+a\s+name\b",
+    r"\bprovided\s+with\s+(?:a\s+)?(?:valid\s+)?name\b",
+    flags=re.IGNORECASE,
+)
+
+
+NAME_ARGUMENT_PATTERN = re.compile(
+    r"\bname\s+argument\b",
     flags=re.IGNORECASE,
 )
 
@@ -478,6 +498,7 @@ def _exact_stdout_requirement(
         OUTPUT_MATCH_STDOUT_PATTERN,
         OUTPUT_IS_EXACTLY_STDOUT_PATTERN,
         DISPLAY_EXACTLY_STDOUT_PATTERN,
+        OUTPUT_VALUE_EXACTLY_STDOUT_PATTERN,
     ):
         match = pattern.search(task_text)
 
@@ -594,9 +615,23 @@ def _controlled_workspace_arguments(
         if not 1 <= len(arguments) <= 8:
             continue
 
-        if not all(
+        flagged_name_arguments = (
+            len(arguments) == 2
+            and arguments[0] == "--name"
+            and SAFE_TASK_ARGUMENT_PATTERN.fullmatch(
+                arguments[1]
+            )
+            is not None
+        )
+
+        positional_arguments = all(
             SAFE_TASK_ARGUMENT_PATTERN.fullmatch(argument)
             for argument in arguments
+        )
+
+        if not (
+            flagged_name_arguments
+            or positional_arguments
         ):
             continue
 
@@ -619,7 +654,12 @@ def _controlled_workspace_arguments(
     if greeting_match is None:
         return None
 
-    return [greeting_match.group("name")]
+    name = greeting_match.group("name")
+
+    if NAME_ARGUMENT_PATTERN.search(task_text) is not None:
+        return ["--name", name]
+
+    return [name]
 
 
 def _evaluate_execution_acceptance(

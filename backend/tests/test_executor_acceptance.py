@@ -38,6 +38,22 @@ def test_extracts_arguments_from_sample_command():
     ) == ["Alice"]
 
 
+def test_extracts_flagged_name_from_sample_command():
+    task = {
+        "title": "Test Script Functionality",
+        "instructions": (
+            "Run the script with a sample name "
+            "(e.g., `python hello.py --name Alice`) "
+            'to ensure it prints "Hello, Alice!".'
+        ),
+    }
+
+    assert _controlled_workspace_arguments(
+        task,
+        "hello.py",
+    ) == ["--name", "Alice"]
+
+
 def test_derives_argument_from_exact_greeting():
     task = {
         "title": "Verify Output",
@@ -152,6 +168,42 @@ def test_exact_stdout_verification_is_workspace_execution():
     }
 
     assert _is_workspace_execution_task(task) is True
+
+
+def test_extracts_exact_stdout_when_exactly_follows_output_value():
+    task = {
+        "title": "Verify Execution Success",
+        "instructions": (
+            "Confirm the script runs without errors and "
+            "produces the exact output. Check for correct "
+            "argument parsing and formatting.\n\n"
+            "Success-check: The script must output "
+            '`"Hello, NAME!"` exactly when provided with '
+            "a valid name argument."
+        ),
+    }
+
+    assert _exact_stdout_requirement(task) == "Hello, NAME!"
+
+
+def test_derives_flagged_name_from_symbolic_success_check():
+    task = {
+        "title": "Verify Execution Success",
+        "instructions": (
+            "Confirm the script runs without errors and "
+            "produces the exact output. Check for correct "
+            "argument parsing and formatting.\n\n"
+            "Success-check: The script must output "
+            '`"Hello, NAME!"` exactly when provided with '
+            "a valid name argument."
+        ),
+    }
+
+    assert _exact_stdout_requirement(task) == "Hello, NAME!"
+    assert _controlled_workspace_arguments(
+        task,
+        "hello.py",
+    ) == ["--name", "NAME"]
 
 
 def test_explicit_python_program_execution_is_workspace_execution():
