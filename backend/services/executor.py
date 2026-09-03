@@ -2399,12 +2399,71 @@ BUILDER_TASK_PATTERN = re.compile(
 )
 
 
+DIRECTORY_SETUP_PATTERN = re.compile(
+    r"""
+    \bcreate\s+
+    (?:a\s+|an\s+)?
+    (?:new\s+)?
+    (?:project\s+)?
+    director(?:y|ies)\b
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
+EXPLICIT_BUILD_ARTIFACT_PATTERN = re.compile(
+    r"""
+    \b(
+        build|
+        implement|
+        create|
+        generate|
+        write|
+        scaffold|
+        code|
+        develop|
+        modify|
+        update|
+        save|
+        edit|
+        append|
+        replace|
+        rewrite
+    )\b
+    .{0,120}
+    \b(
+        file|
+        files|
+        code|
+        script|
+        program|
+        application|
+        app|
+        module|
+        package|
+        component|
+        source|
+        artifact
+    )\b
+    """,
+    flags=re.IGNORECASE | re.DOTALL | re.VERBOSE,
+)
+
+
 def _is_builder_task(task: Any) -> bool:
     """Return True only for tasks that explicitly request build artifacts."""
     task_text = (
         f"{task['title']}\n"
         f"{task['instructions']}"
     )
+
+    if (
+        DIRECTORY_SETUP_PATTERN.search(task_text)
+        and not EXPLICIT_BUILD_ARTIFACT_PATTERN.search(
+            task_text
+        )
+    ):
+        return False
 
     return bool(BUILDER_TASK_PATTERN.search(task_text))
 

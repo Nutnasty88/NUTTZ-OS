@@ -7,7 +7,21 @@ from services.executor import (
     _evidence_requirement,
     _exact_stdout_requirement,
     _is_workspace_execution_task,
+    _is_builder_task,
 )
+
+
+def test_environment_directory_setup_is_not_builder_task():
+    task = {
+        "title": "Set Up Environment",
+        "instructions": (
+            "Install Python 3.x if not already installed. "
+            "Create a new directory for the project and "
+            "navigate into it."
+        ),
+    }
+
+    assert _is_builder_task(task) is False
 
 
 def test_extracts_exact_stdout_and_controlled_stdin():
