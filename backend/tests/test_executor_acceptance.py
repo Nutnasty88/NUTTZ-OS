@@ -365,3 +365,32 @@ def test_controlled_arguments_reject_bare_python_artifact_shell_syntax():
         task,
         "main.py",
     ) is None
+
+
+def test_persistence_verification_is_not_builder_task():
+    task = {
+        "title": "Verify Persistence",
+        "instructions": (
+            '- Run `main.py add "Buy milk"` to save the task.\n'
+            '- Run `main.py list` to ensure "Buy milk" is printed.\n'
+            '- Restart the program and re-run `list` to confirm '
+            'the task persists across executions.\n\n'
+            'Success-check: The task "Buy milk" must be stored '
+            'in the SQLite database and remain visible after '
+            'closing and reopening the program.'
+        ),
+    }
+
+    assert _is_builder_task(task) is False
+
+
+def test_explicit_source_creation_remains_builder_task():
+    task = {
+        "title": "Create main.py",
+        "instructions": (
+            "Create main.py that imports database and implements "
+            "the add and list command-line operations."
+        ),
+    }
+
+    assert _is_builder_task(task) is True

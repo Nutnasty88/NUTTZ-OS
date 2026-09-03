@@ -2378,7 +2378,6 @@ BUILDER_TASK_PATTERN = re.compile(
         develop|
         modify|
         update|
-        save|
         edit|
         append|
         replace|
@@ -2443,7 +2442,6 @@ EXPLICIT_SOURCE_FILE_PATTERN = re.compile(
         develop|
         modify|
         update|
-        save|
         edit|
         append|
         replace|
@@ -2481,7 +2479,6 @@ EXPLICIT_BUILD_ARTIFACT_PATTERN = re.compile(
         develop|
         modify|
         update|
-        save|
         edit|
         append|
         replace|
