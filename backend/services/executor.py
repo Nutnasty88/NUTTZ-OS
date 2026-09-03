@@ -1846,7 +1846,7 @@ def _complete_workspace_execution_task(
             "argument_fixture",
             (
                 f"Task {task['position']} is using "
-                f"{len(controlled_arguments)} bounded positional "
+                f"{len(controlled_arguments)} controlled "
                 "argument fixture(s) for deterministic verification."
             ),
         )
