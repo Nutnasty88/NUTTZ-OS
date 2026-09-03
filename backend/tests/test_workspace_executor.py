@@ -101,6 +101,68 @@ def test_controlled_argument_validation():
         )
 
 
+def test_controlled_name_flag_validation():
+    assert _validate_controlled_arguments(
+        ["--name", "Alice"]
+    ) == ["--name", "Alice"]
+
+    with pytest.raises(
+        WorkspaceExecutionError,
+        match="only bounded",
+    ):
+        _validate_controlled_arguments(
+            ["--other", "Alice"]
+        )
+
+    with pytest.raises(
+        WorkspaceExecutionError,
+        match="only bounded",
+    ):
+        _validate_controlled_arguments(
+            ["--name"]
+        )
+
+    with pytest.raises(
+        WorkspaceExecutionError,
+        match="only bounded",
+    ):
+        _validate_controlled_arguments(
+            ["--name", "../../unsafe"]
+        )
+
+
+def test_executes_with_controlled_name_flag(
+    isolated_builder_root,
+):
+    workspace_manager.create_workspace(
+        "mission-12005"
+    )
+
+    workspace_manager.write_workspace_file(
+        "mission-12005",
+        "hello.py",
+        (
+            "import argparse\n"
+            "parser = argparse.ArgumentParser()\n"
+            'parser.add_argument("--name", required=True)\n'
+            "args = parser.parse_args()\n"
+            'print(f"Hello, {args.name}!")\n'
+        ),
+    )
+
+    execution = execute_python_artifact(
+        12005,
+        "hello.py",
+        arguments=["--name", "Alice"],
+    )
+
+    assert execution["verified"] is True
+    assert execution["exit_code"] == 0
+    assert execution["stdout"] == "Hello, Alice!\n"
+    assert execution["arguments_supplied"] is True
+    assert execution["argument_count"] == 2
+
+
 def test_executes_with_controlled_stdin(
     isolated_builder_root,
 ):

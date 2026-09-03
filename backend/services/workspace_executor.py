@@ -107,19 +107,35 @@ def _validate_controlled_arguments(
             "Workspace Executor limit."
         )
 
-    safe_arguments = []
+    controlled_name_pair = (
+        len(arguments) == 2
+        and arguments[0] == "--name"
+        and isinstance(arguments[1], str)
+        and SAFE_ARGUMENT_PATTERN.fullmatch(
+            arguments[1]
+        )
+        is not None
+    )
 
-    for argument in arguments:
-        if (
-            not isinstance(argument, str)
-            or SAFE_ARGUMENT_PATTERN.fullmatch(argument) is None
-        ):
-            raise WorkspaceExecutionError(
-                "Controlled arguments may contain only bounded "
-                "letters, numbers, dots, underscores, and hyphens."
-            )
+    if controlled_name_pair:
+        safe_arguments = list(arguments)
+    else:
+        safe_arguments = []
 
-        safe_arguments.append(argument)
+        for argument in arguments:
+            if (
+                not isinstance(argument, str)
+                or SAFE_ARGUMENT_PATTERN.fullmatch(
+                    argument
+                )
+                is None
+            ):
+                raise WorkspaceExecutionError(
+                    "Controlled arguments may contain only bounded "
+                    "letters, numbers, dots, underscores, and hyphens."
+                )
+
+            safe_arguments.append(argument)
 
     argument_bytes = b"\x00".join(
         argument.encode("utf-8")
