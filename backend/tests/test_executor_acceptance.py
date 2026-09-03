@@ -272,3 +272,29 @@ def test_derives_stdin_from_explicit_example_name():
     }
 
     assert _controlled_workspace_stdin(task) == "Alice\n"
+
+
+def test_explicit_python_filename_creation_is_builder_task():
+    task = {
+        "title": "Create calculator.py with add(a, b) function",
+        "instructions": (
+            "Write a function `add(a, b)` that returns "
+            "the sum of two numbers."
+        ),
+    }
+
+    assert _is_builder_task(task) is True
+
+
+def test_explicit_python_entrypoint_creation_is_builder_task():
+    task = {
+        "title": "Create main.py to import and use add",
+        "instructions": (
+            "Import `add` from `calculator`, read two "
+            "command-line arguments, convert them to "
+            "integers, and print \"Result: 5\" when "
+            "called with 2 and 3."
+        ),
+    }
+
+    assert _is_builder_task(task) is True

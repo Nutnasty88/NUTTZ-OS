@@ -2399,6 +2399,32 @@ BUILDER_TASK_PATTERN = re.compile(
 )
 
 
+EXPLICIT_SOURCE_FILE_PATTERN = re.compile(
+    r"""
+    \b(
+        build|
+        implement|
+        create|
+        generate|
+        write|
+        scaffold|
+        code|
+        develop|
+        modify|
+        update|
+        save|
+        edit|
+        append|
+        replace|
+        rewrite
+    )\b
+    .{0,180}
+    \b[A-Za-z0-9_][A-Za-z0-9_.-]*\.py\b
+    """,
+    flags=re.IGNORECASE | re.DOTALL | re.VERBOSE,
+)
+
+
 DIRECTORY_SETUP_PATTERN = re.compile(
     r"""
     \bcreate\s+
@@ -2465,7 +2491,10 @@ def _is_builder_task(task: Any) -> bool:
     ):
         return False
 
-    return bool(BUILDER_TASK_PATTERN.search(task_text))
+    return bool(
+        BUILDER_TASK_PATTERN.search(task_text)
+        or EXPLICIT_SOURCE_FILE_PATTERN.search(task_text)
+    )
 
 
 def _future_project_task_state(
