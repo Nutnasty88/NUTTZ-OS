@@ -8,6 +8,7 @@ from services.executor import (
     _exact_stdout_requirement,
     _is_workspace_execution_task,
     _is_builder_task,
+    CONDITIONAL_INSTALL_PATTERN,
 )
 
 
@@ -126,6 +127,38 @@ def test_sqlite_row_allows_safe_installation_verification():
         ).fetchone()
     finally:
         connection.close()
+
+    requirement, allowed = _evidence_requirement(task)
+
+    assert allowed is True
+    assert "allowlisted local diagnostic" in requirement
+
+
+def test_conditional_install_pattern_handles_version_period():
+    instructions = (
+        "Install Python 3.x if not already installed. "
+        "Create a new directory for the project."
+    )
+
+    match = CONDITIONAL_INSTALL_PATTERN.search(
+        instructions
+    )
+
+    assert match is not None
+    assert match.group(0) == (
+        "Install Python 3.x if not already installed"
+    )
+
+
+def test_conditional_install_allows_existing_python_verification():
+    task = {
+        "title": "Set Up Environment",
+        "instructions": (
+            "Install Python 3.x if not already installed. "
+            "Create a new directory for the project and "
+            "navigate into it."
+        ),
+    }
 
     requirement, allowed = _evidence_requirement(task)
 

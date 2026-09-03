@@ -3212,6 +3212,16 @@ EXPLICIT_MUTATION_PATTERN = re.compile(
 )
 
 
+CONDITIONAL_INSTALL_PATTERN = re.compile(
+    r"""
+    \binstall\b
+    [^\n!?]{0,120}?
+    \bif\s+not\s+already\s+installed\b
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
 def _safe_tool_verification_only(
     task: Any,
 ) -> bool:
@@ -3226,13 +3236,30 @@ def _safe_tool_verification_only(
         task["instructions"]
     )
 
-    if SAFE_TOOL_VERIFICATION_PATTERN.search(
-        instructions
-    ) is None:
+    verification_match = (
+        SAFE_TOOL_VERIFICATION_PATTERN.search(
+            instructions
+        )
+    )
+    conditional_install_match = (
+        CONDITIONAL_INSTALL_PATTERN.search(
+            instructions
+        )
+    )
+
+    if (
+        verification_match is None
+        and conditional_install_match is None
+    ):
         return False
 
+    mutation_text = CONDITIONAL_INSTALL_PATTERN.sub(
+        "",
+        instructions,
+    )
+
     if EXPLICIT_MUTATION_PATTERN.search(
-        instructions
+        mutation_text
     ) is not None:
         return False
 
