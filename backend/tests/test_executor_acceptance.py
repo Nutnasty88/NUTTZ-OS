@@ -6,6 +6,7 @@ from services.executor import (
     _evaluate_execution_acceptance,
     _evidence_requirement,
     _exact_stdout_requirement,
+    _is_workspace_execution_task,
 )
 
 
@@ -117,3 +118,34 @@ def test_explicit_installation_remains_blocked():
         "System-changing work requires an approved "
         "execution tool result."
     )
+
+def test_python_installation_check_is_not_workspace_execution():
+    task = {
+        "title": "Check Python Installation",
+        "instructions": (
+            "Verify Python is installed and accessible via command line."
+        ),
+    }
+
+    assert _is_workspace_execution_task(task) is False
+
+
+def test_explicit_python_artifact_run_is_workspace_execution():
+    task = {
+        "title": "Run the Program",
+        "instructions": (
+            "Execute `python hello.py` in the terminal, "
+            'then input a name (e.g., "Alice").'
+        ),
+    }
+
+    assert _is_workspace_execution_task(task) is True
+
+
+def test_explicit_python_program_execution_is_workspace_execution():
+    task = {
+        "title": "Execute Python Program",
+        "instructions": "Run the Python program and verify its output.",
+    }
+
+    assert _is_workspace_execution_task(task) is True

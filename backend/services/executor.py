@@ -642,6 +642,28 @@ def _is_workspace_execution_task(task: Any) -> bool:
         f"{task['instructions']}"
     )
 
+    normalized = task_text.lower()
+
+    python_environment_check = (
+        "python" in normalized
+        and (
+            "installed" in normalized
+            or "installation" in normalized
+            or "available" in normalized
+            or "accessible" in normalized
+        )
+        and not PYTHON_ARTIFACT_PATTERN.search(task_text)
+        and not re.search(
+            r"\b(?:run|execute)\b.{0,120}\b"
+            r"(?:script|program|application|app|project)\b",
+            task_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    )
+
+    if python_environment_check:
+        return False
+
     return bool(
         WORKSPACE_EXECUTION_PATTERN.search(task_text)
     )
