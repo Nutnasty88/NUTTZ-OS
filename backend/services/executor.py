@@ -484,10 +484,32 @@ def _controlled_workspace_stdin(
 ) -> str | None:
     """
     Return one narrow deterministic stdin fixture when a task explicitly
-    requests a name and defines exact stdout using the NAME placeholder.
+    requests a name.
 
     Arbitrary model-generated stdin is never accepted here.
     """
+    task_text = (
+        f"{task['title']}\n"
+        f"{task['instructions']}"
+    )
+
+    example_match = re.search(
+        r"""
+        \b(?:input|enter|provide|supply)\s+
+        (?:(?:a|the)\s+)?
+        name\b
+        .{0,80}?
+        \b(?:e\.g\.|example)\s*[,=:]?\s*
+        [("']*
+        (?P<name>[A-Za-z0-9][A-Za-z0-9_.-]{0,63})
+        """,
+        task_text,
+        flags=re.IGNORECASE | re.DOTALL | re.VERBOSE,
+    )
+
+    if example_match is not None:
+        return f"{example_match.group('name')}\n"
+
     expected_stdout = _exact_stdout_requirement(task)
 
     if expected_stdout is None:
@@ -498,11 +520,6 @@ def _controlled_workspace_stdin(
         expected_stdout,
     ) is None:
         return None
-
-    task_text = (
-        f"{task['title']}\n"
-        f"{task['instructions']}"
-    )
 
     if CONTROLLED_NAME_STDIN_PATTERN.search(
         task_text

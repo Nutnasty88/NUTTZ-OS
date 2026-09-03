@@ -149,3 +149,15 @@ def test_explicit_python_program_execution_is_workspace_execution():
     }
 
     assert _is_workspace_execution_task(task) is True
+
+
+def test_derives_stdin_from_explicit_example_name():
+    task = {
+        "title": "Run the Program",
+        "instructions": (
+            "Execute `python hello.py` in the terminal, "
+            'then input a name (e.g., "Alice").'
+        ),
+    }
+
+    assert _controlled_workspace_stdin(task) == "Alice\n"
