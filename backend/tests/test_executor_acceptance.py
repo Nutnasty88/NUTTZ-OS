@@ -298,3 +298,27 @@ def test_explicit_python_entrypoint_creation_is_builder_task():
     }
 
     assert _is_builder_task(task) is True
+
+
+def test_implementation_of_command_line_parsing_is_builder_task():
+    task = {
+        "title": "Implement command-line argument parsing",
+        "instructions": (
+            "Use `sys.argv` to retrieve arguments, validate numeric "
+            "input, and compute the result."
+        ),
+    }
+
+    assert _is_builder_task(task) is True
+
+
+def test_generic_implementation_without_code_context_is_not_builder_task():
+    task = {
+        "title": "Implement the process",
+        "instructions": (
+            "Implement the requested operational process and document "
+            "the outcome."
+        ),
+    }
+
+    assert _is_builder_task(task) is False

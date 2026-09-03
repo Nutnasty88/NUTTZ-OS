@@ -2399,6 +2399,31 @@ BUILDER_TASK_PATTERN = re.compile(
 )
 
 
+CODE_IMPLEMENTATION_PATTERN = re.compile(
+    r"""
+    \b(
+        implement|
+        modify|
+        update|
+        edit|
+        rewrite|
+        refactor
+    )\b
+    .{0,240}
+    (
+        \bsys\.argv\b|
+        \bcommand[- ]line\s+argument(?:s|\s+parsing)?\b|
+        \bargument\s+parsing\b|
+        \bfunction\b|
+        \bclass\b|
+        \bimport\b|
+        \bmodule\b
+    )
+    """,
+    flags=re.IGNORECASE | re.DOTALL | re.VERBOSE,
+)
+
+
 EXPLICIT_SOURCE_FILE_PATTERN = re.compile(
     r"""
     \b(
@@ -2494,6 +2519,7 @@ def _is_builder_task(task: Any) -> bool:
     return bool(
         BUILDER_TASK_PATTERN.search(task_text)
         or EXPLICIT_SOURCE_FILE_PATTERN.search(task_text)
+        or CODE_IMPLEMENTATION_PATTERN.search(task_text)
     )
 
 
