@@ -1775,12 +1775,15 @@ def _complete_workspace_execution_task(
         ),
     )
 
-    controlled_arguments = _controlled_workspace_arguments(
-        task,
-        artifact_path,
+    controlled_arguments = (
+        _controlled_workspace_arguments(
+            task,
+            artifact_path,
+        )
+        or []
     )
 
-    if controlled_arguments is not None:
+    if controlled_arguments:
         log_event(
             mission_id,
             "Workspace Executor",
