@@ -446,8 +446,7 @@ CONTROLLED_PYTHON_COMMAND_PATTERN = re.compile(
     r"""
     `
     (?P<command>
-        (?:python|python3)
-        \s+
+        (?:(?:python|python3)\s+)?
         [A-Za-z0-9_.\-/]+\.py
         (?:\s+[A-Za-z0-9_.-]+){1,8}
     )
@@ -595,19 +594,26 @@ def _controlled_workspace_arguments(
         except ValueError:
             continue
 
-        if len(tokens) < 3:
+        if len(tokens) < 2:
             continue
 
         executable = tokens[0].lower()
-        command_artifact = tokens[1].rsplit(
-            "/",
-            maxsplit=1,
-        )[-1]
 
-        arguments = tokens[2:]
+        if executable in {"python", "python3"}:
+            if len(tokens) < 3:
+                continue
 
-        if executable not in {"python", "python3"}:
-            continue
+            command_artifact = tokens[1].rsplit(
+                "/",
+                maxsplit=1,
+            )[-1]
+            arguments = tokens[2:]
+        else:
+            command_artifact = tokens[0].rsplit(
+                "/",
+                maxsplit=1,
+            )[-1]
+            arguments = tokens[1:]
 
         if command_artifact != artifact_name:
             continue

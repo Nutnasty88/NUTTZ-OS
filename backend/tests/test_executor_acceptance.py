@@ -322,3 +322,46 @@ def test_generic_implementation_without_code_context_is_not_builder_task():
     }
 
     assert _is_builder_task(task) is False
+
+
+def test_controlled_arguments_accept_bare_python_artifact_command():
+    task = {
+        "title": "Test the application",
+        "instructions": (
+            'Run `main.py 2 3` and confirm the output matches '
+            '"Result: 5".'
+        ),
+    }
+
+    assert _controlled_workspace_arguments(
+        task,
+        "main.py",
+    ) == ["2", "3"]
+
+
+def test_controlled_arguments_reject_bare_non_python_artifact():
+    task = {
+        "title": "Test the application",
+        "instructions": (
+            'Run `script.sh 2 3` and confirm the output.'
+        ),
+    }
+
+    assert _controlled_workspace_arguments(
+        task,
+        "main.py",
+    ) is None
+
+
+def test_controlled_arguments_reject_bare_python_artifact_shell_syntax():
+    task = {
+        "title": "Test the application",
+        "instructions": (
+            'Run `main.py 2 3 && rm file` and confirm the output.'
+        ),
+    }
+
+    assert _controlled_workspace_arguments(
+        task,
+        "main.py",
+    ) is None
