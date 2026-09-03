@@ -142,6 +142,18 @@ def test_explicit_python_artifact_run_is_workspace_execution():
     assert _is_workspace_execution_task(task) is True
 
 
+def test_exact_stdout_verification_is_workspace_execution():
+    task = {
+        "title": "Verify Output",
+        "instructions": (
+            "Confirm the terminal displays "
+            "`Hello, Alice!` exactly."
+        ),
+    }
+
+    assert _is_workspace_execution_task(task) is True
+
+
 def test_explicit_python_program_execution_is_workspace_execution():
     task = {
         "title": "Execute Python Program",

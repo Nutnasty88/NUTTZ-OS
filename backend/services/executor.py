@@ -416,6 +416,18 @@ OUTPUT_IS_EXACTLY_STDOUT_PATTERN = re.compile(
 )
 
 
+DISPLAY_EXACTLY_STDOUT_PATTERN = re.compile(
+    r"""
+    \b(?:terminal\s+)?displays?\s+
+    (?P<quote>["'`])
+    (?P<expected>[^\r\n"'`]+)
+    (?P=quote)
+    \s+exactly\b
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
 CONTROLLED_PYTHON_COMMAND_PATTERN = re.compile(
     r"""
     `
@@ -465,6 +477,7 @@ def _exact_stdout_requirement(
         *EXACT_STDOUT_PATTERNS,
         OUTPUT_MATCH_STDOUT_PATTERN,
         OUTPUT_IS_EXACTLY_STDOUT_PATTERN,
+        DISPLAY_EXACTLY_STDOUT_PATTERN,
     ):
         match = pattern.search(task_text)
 
@@ -680,6 +693,9 @@ def _is_workspace_execution_task(task: Any) -> bool:
 
     if python_environment_check:
         return False
+
+    if _exact_stdout_requirement(task) is not None:
+        return True
 
     return bool(
         WORKSPACE_EXECUTION_PATTERN.search(task_text)
