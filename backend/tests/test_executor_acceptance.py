@@ -810,3 +810,43 @@ def test_ensure_printed_rule_does_not_match_other_verbs():
     }
 
     assert _exact_stdout_requirement(task) is None
+
+
+def test_extracts_stdout_requirement_from_displayed_exactly_as_wording():
+    task = {
+        "title": (
+            "Test 'main.py list' to confirm task is displayed "
+            'exactly as "Buy milk"'
+        ),
+        "instructions": (
+            "Test 'main.py list' to confirm task is displayed "
+            'exactly as "Buy milk"'
+        ),
+    }
+
+    assert _exact_stdout_requirement(task) == "Buy milk"
+
+
+def test_displayed_exactly_as_acceptance_rejects_wrong_stdout():
+    task = {
+        "title": (
+            "Test 'main.py list' to confirm task is displayed "
+            'exactly as "Buy milk"'
+        ),
+        "instructions": (
+            "Test 'main.py list' to confirm task is displayed "
+            'exactly as "Buy milk"'
+        ),
+    }
+
+    acceptance = _evaluate_execution_acceptance(
+        task,
+        {
+            "stdout": "No tasks found.\n",
+        },
+    )
+
+    assert acceptance["applicable"] is True
+    assert acceptance["verified"] is False
+    assert acceptance["expected"] == "Buy milk"
+    assert acceptance["actual"] == "No tasks found."

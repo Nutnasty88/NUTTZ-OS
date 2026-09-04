@@ -411,6 +411,18 @@ ENSURE_QUOTED_PRINTED_STDOUT_PATTERN = re.compile(
 )
 
 
+
+DISPLAYED_EXACTLY_AS_STDOUT_PATTERN = re.compile(
+    r"""
+    \bdisplayed\s+exactly\s+as\s+
+    (?P<quote>["'])
+    (?P<expected>[^\r\n"'`]+)
+    (?P=quote)
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
 CONTROLLED_NAME_STDIN_PATTERN = re.compile(
     r"""
     \b(?:input|enter|provide|supply)\s+
@@ -512,6 +524,7 @@ def _exact_stdout_requirement(
         *EXACT_STDOUT_PATTERNS,
         OUTPUT_MATCH_STDOUT_PATTERN,
         ENSURE_QUOTED_PRINTED_STDOUT_PATTERN,
+        DISPLAYED_EXACTLY_AS_STDOUT_PATTERN,
         OUTPUT_IS_EXACTLY_STDOUT_PATTERN,
         DISPLAY_EXACTLY_STDOUT_PATTERN,
         OUTPUT_VALUE_EXACTLY_STDOUT_PATTERN,
