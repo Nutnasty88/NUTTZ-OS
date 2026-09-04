@@ -32,7 +32,8 @@ ARGUMENT_COUNT_LIMIT: Final = 8
 ARGUMENT_BYTES_LIMIT: Final = 512
 
 SAFE_ARGUMENT_PATTERN: Final = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+    r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}"
+    r"(?: [A-Za-z0-9][A-Za-z0-9_.-]{0,63})*$"
 )
 
 PYTHON_WORKSPACE_BOOTSTRAP: Final = (
@@ -483,6 +484,85 @@ def execute_python_artifact(
             "error": str(error),
         }
 
+
+
+def execute_python_artifact_sequence(
+    mission_id: int,
+    relative_path: str,
+    argument_steps: list[list[str]],
+) -> dict[str, Any]:
+    """
+    Execute a bounded sequence of verified Python artifact invocations.
+
+    Each step is a separate process executed through the existing
+    Workspace Executor. Steps share the same Builder workspace so
+    filesystem-backed state can persist between invocations.
+    """
+    if not isinstance(argument_steps, list):
+        raise WorkspaceExecutionError(
+            "Controlled execution sequence must be a list."
+        )
+
+    if not 1 <= len(argument_steps) <= 4:
+        raise WorkspaceExecutionError(
+            "Controlled execution sequence must contain "
+            "between 1 and 4 steps."
+        )
+
+    steps: list[dict[str, Any]] = []
+
+    for arguments in argument_steps:
+        if not isinstance(arguments, list):
+            raise WorkspaceExecutionError(
+                "Each controlled execution sequence step "
+                "must contain an argument list."
+            )
+
+        evidence = execute_python_artifact(
+            mission_id,
+            relative_path,
+            arguments=arguments,
+        )
+
+        steps.append(evidence)
+
+        if (
+            evidence.get("verified") is not True
+            or evidence.get("exit_code") != 0
+        ):
+            break
+
+    verified = (
+        len(steps) == len(argument_steps)
+        and all(
+            step.get("verified") is True
+            and step.get("exit_code") == 0
+            for step in steps
+        )
+    )
+
+    final_step = steps[-1] if steps else {}
+
+    return {
+        "verified": verified,
+        "step_count": len(steps),
+        "requested_step_count": len(argument_steps),
+        "steps": steps,
+        "exit_code": final_step.get("exit_code"),
+        "stdout": final_step.get("stdout", ""),
+        "stderr": final_step.get("stderr", ""),
+        "workspace": final_step.get("workspace"),
+        "artifact": final_step.get(
+            "artifact",
+            relative_path,
+        ),
+        "artifact_sha256": final_step.get(
+            "artifact_sha256"
+        ),
+        "artifact_size_bytes": final_step.get(
+            "artifact_size_bytes"
+        ),
+    }
 
 def launch_verified_project(
     mission_id: int,

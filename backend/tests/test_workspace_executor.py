@@ -254,3 +254,271 @@ def test_manifest_denies_unsafe_argument(
         match="controlled arguments are invalid",
     ):
         launch_verified_project(12004)
+
+
+def test_controlled_argument_validation_accepts_bounded_spaces():
+    assert _validate_controlled_arguments(
+        ["add", "Buy milk"]
+    ) == ["add", "Buy milk"]
+
+
+def test_controlled_argument_validation_rejects_shell_metacharacters():
+    unsafe_values = [
+        "Buy;rm",
+        "Buy|cat",
+        "Buy&rm",
+        "Buy>file",
+        "Buy<file",
+        "$(whoami)",
+        "`whoami`",
+    ]
+
+    for value in unsafe_values:
+        with pytest.raises(
+            WorkspaceExecutionError,
+            match="only bounded",
+        ):
+            _validate_controlled_arguments(
+                ["add", value]
+            )
+
+
+def test_controlled_argument_validation_rejects_control_characters():
+    unsafe_values = [
+        "Buy\nmilk",
+        "Buy\rmilk",
+        "Buy\x00milk",
+    ]
+
+    for value in unsafe_values:
+        with pytest.raises(
+            WorkspaceExecutionError,
+            match="only bounded",
+        ):
+            _validate_controlled_arguments(
+                ["add", value]
+            )
+
+
+def test_python_artifact_sequence_persists_state_between_processes(
+    isolated_builder_root,
+):
+    workspace_name = "mission-12005"
+
+    workspace_manager.create_workspace(
+        workspace_name
+    )
+
+    workspace_manager.write_workspace_file(
+        workspace_name,
+        "main.py",
+        (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "\n"
+            'state = Path("state.txt")\n'
+            "\n"
+            'if sys.argv[1] == "add":\n'
+            "    state.write_text(sys.argv[2])\n"
+            'elif sys.argv[1] == "list":\n'
+            "    print(state.read_text())\n"
+        ),
+    )
+
+    runner = getattr(
+        workspace_executor,
+        "execute_python_artifact_sequence",
+        None,
+    )
+
+    assert runner is not None
+
+    evidence = runner(
+        12005,
+        "main.py",
+        [
+            ["add", "Buy milk"],
+            ["list"],
+        ],
+    )
+
+    assert evidence["verified"] is True
+    assert evidence["step_count"] == 2
+    assert len(evidence["steps"]) == 2
+
+    first = evidence["steps"][0]
+    second = evidence["steps"][1]
+
+    assert first["verified"] is True
+    assert first["exit_code"] == 0
+    assert first["stdout"] == ""
+
+    assert second["verified"] is True
+    assert second["exit_code"] == 0
+    assert second["stdout"] == "Buy milk\n"
+
+    assert (
+        second["command"][-1]
+        == "<controlled-argument>"
+    )
+
+
+def test_python_artifact_sequence_stops_after_failed_step(
+    isolated_builder_root,
+):
+    workspace_name = "mission-12006"
+
+    workspace_manager.create_workspace(
+        workspace_name
+    )
+
+    workspace_manager.write_workspace_file(
+        workspace_name,
+        "main.py",
+        (
+            "import sys\n"
+            "\n"
+            'if sys.argv[1] == "fail":\n'
+            "    raise SystemExit(7)\n"
+            "\n"
+            'print("SHOULD NOT RUN")\n'
+        ),
+    )
+
+    runner = getattr(
+        workspace_executor,
+        "execute_python_artifact_sequence",
+        None,
+    )
+
+    assert runner is not None
+
+    evidence = runner(
+        12006,
+        "main.py",
+        [
+            ["fail"],
+            ["list"],
+        ],
+    )
+
+    assert evidence["verified"] is False
+    assert evidence["step_count"] == 1
+    assert len(evidence["steps"]) == 1
+    assert evidence["steps"][0]["exit_code"] == 7
+
+
+def test_python_artifact_sequence_rejects_too_many_steps(
+    isolated_builder_root,
+):
+    workspace_name = "mission-12007"
+
+    workspace_manager.create_workspace(
+        workspace_name
+    )
+
+    workspace_manager.write_workspace_file(
+        workspace_name,
+        "main.py",
+        'print("OK")\n',
+    )
+
+    runner = getattr(
+        workspace_executor,
+        "execute_python_artifact_sequence",
+        None,
+    )
+
+    assert runner is not None
+
+    with pytest.raises(
+        WorkspaceExecutionError,
+        match="sequence",
+    ):
+        runner(
+            12007,
+            "main.py",
+            [
+                ["one"],
+                ["two"],
+                ["three"],
+                ["four"],
+                ["five"],
+            ],
+        )
+
+
+def test_python_artifact_sequence_rejects_empty_sequence(
+    isolated_builder_root,
+):
+    workspace_name = "mission-12008"
+
+    workspace_manager.create_workspace(
+        workspace_name
+    )
+
+    workspace_manager.write_workspace_file(
+        workspace_name,
+        "main.py",
+        'print("OK")\n',
+    )
+
+    runner = getattr(
+        workspace_executor,
+        "execute_python_artifact_sequence",
+        None,
+    )
+
+    assert runner is not None
+
+    with pytest.raises(
+        WorkspaceExecutionError,
+        match="sequence",
+    ):
+        runner(
+            12008,
+            "main.py",
+            [],
+        )
+
+
+def test_python_artifact_sequence_promotes_artifact_metadata(
+    isolated_builder_root,
+):
+    workspace_name = "mission-12009"
+
+    workspace_manager.create_workspace(
+        workspace_name
+    )
+
+    artifact = workspace_manager.write_workspace_file(
+        workspace_name,
+        "main.py",
+        (
+            "import sys\n"
+            "\n"
+            'if sys.argv[1] == "write":\n'
+            '    open("state.txt", "w").write("READY")\n'
+            'elif sys.argv[1] == "read":\n'
+            '    print(open("state.txt").read())\n'
+        ),
+    )
+
+    evidence = workspace_executor.execute_python_artifact_sequence(
+        12009,
+        "main.py",
+        [
+            ["write"],
+            ["read"],
+        ],
+    )
+
+    assert evidence["verified"] is True
+    assert evidence["workspace"] == workspace_name
+    assert evidence["artifact"] == "main.py"
+    assert evidence["artifact_sha256"] == artifact["sha256"]
+    assert (
+        evidence["artifact_size_bytes"]
+        == artifact["size_bytes"]
+    )
+    assert evidence["stdout"] == "READY\n"

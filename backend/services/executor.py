@@ -12,7 +12,10 @@ from app.services.events import log_event
 from services.builder import build_task, repair_artifact
 from services.ollama_service import chat_with_ollama
 from services.tool_runner import run_tool
-from services.workspace_executor import execute_python_artifact
+from services.workspace_executor import (
+    execute_python_artifact,
+    execute_python_artifact_sequence,
+)
 from services.workspace_manager import (
     list_workspace_files,
     read_workspace_file,
@@ -562,6 +565,121 @@ def _controlled_workspace_stdin(
     return "NAME\n"
 
 
+
+CONTROLLED_COMMAND_SEQUENCE_LIMIT = 4
+CONTROLLED_COMMAND_ARGUMENT_LIMIT = 8
+CONTROLLED_COMMAND_ARGUMENT_BYTES_LIMIT = 512
+
+CONTROLLED_BACKTICK_PATTERN = re.compile(
+    r"`(?P<command>[^`\r\n]{1,512})`"
+)
+
+CONTROLLED_SHELL_TOKEN_PATTERN = re.compile(
+    r"(?:&&|\|\||[|;&<>]|\$\(|`)"
+)
+
+
+def _controlled_workspace_command_sequence(
+    task: Any,
+    artifact_path: str,
+) -> list[list[str]]:
+    """
+    Extract a bounded sequence of explicit Python artifact invocations.
+
+    Commands are parsed as data only. No shell command is returned or
+    executed. Each invocation must target the requested Python artifact,
+    contain bounded arguments, and contain no shell control syntax.
+    """
+    task_text = (
+        f"{task['title']}\n"
+        f"{task['instructions']}"
+    )
+
+    artifact_name = artifact_path.rsplit(
+        "/",
+        maxsplit=1,
+    )[-1]
+
+    commands: list[list[str]] = []
+
+    for match in CONTROLLED_BACKTICK_PATTERN.finditer(
+        task_text
+    ):
+        raw_command = match.group("command").strip()
+
+        if CONTROLLED_SHELL_TOKEN_PATTERN.search(
+            raw_command
+        ):
+            continue
+
+        try:
+            tokens = shlex.split(
+                raw_command,
+                posix=True,
+            )
+        except ValueError:
+            continue
+
+        if not tokens:
+            continue
+
+        executable = tokens[0].lower()
+
+        if executable in {"python", "python3"}:
+            if len(tokens) < 2:
+                continue
+
+            command_artifact = tokens[1].rsplit(
+                "/",
+                maxsplit=1,
+            )[-1]
+            arguments = tokens[2:]
+        else:
+            command_artifact = tokens[0].rsplit(
+                "/",
+                maxsplit=1,
+            )[-1]
+            arguments = tokens[1:]
+
+        if command_artifact != artifact_name:
+            continue
+
+        if not command_artifact.lower().endswith(
+            ".py"
+        ):
+            continue
+
+        if len(arguments) > CONTROLLED_COMMAND_ARGUMENT_LIMIT:
+            continue
+
+        if any(
+            not isinstance(argument, str)
+            or "\x00" in argument
+            or "\n" in argument
+            or "\r" in argument
+            for argument in arguments
+        ):
+            continue
+
+        argument_bytes = b"\x00".join(
+            argument.encode("utf-8")
+            for argument in arguments
+        )
+
+        if (
+            len(argument_bytes)
+            > CONTROLLED_COMMAND_ARGUMENT_BYTES_LIMIT
+        ):
+            continue
+
+        commands.append(arguments)
+
+        if len(commands) >= CONTROLLED_COMMAND_SEQUENCE_LIMIT:
+            break
+
+    return commands
+
+
 def _controlled_workspace_arguments(
     task: Any,
     artifact_path: str,
@@ -667,6 +785,35 @@ def _controlled_workspace_arguments(
 
     return [name]
 
+
+
+def _execute_controlled_workspace_artifact(
+    mission_id: int,
+    artifact_path: str,
+    *,
+    controlled_stdin: str | None,
+    controlled_arguments: list[str],
+    command_sequence: list[list[str]],
+) -> dict[str, Any]:
+    """
+    Select deterministic single-process or bounded sequence execution.
+
+    Multiple explicit artifact invocations use the sequence runner.
+    Zero or one invocation preserves the existing single-process path.
+    """
+    if len(command_sequence) > 1:
+        return execute_python_artifact_sequence(
+            mission_id,
+            artifact_path,
+            command_sequence,
+        )
+
+    return execute_python_artifact(
+        mission_id,
+        artifact_path,
+        stdin_text=controlled_stdin,
+        arguments=controlled_arguments,
+    )
 
 def _evaluate_execution_acceptance(
     task: Any,
@@ -1837,6 +1984,13 @@ def _complete_workspace_execution_task(
         ),
     )
 
+    command_sequence = (
+        _controlled_workspace_command_sequence(
+            task,
+            artifact_path,
+        )
+    )
+
     controlled_arguments = (
         _controlled_workspace_arguments(
             task,
@@ -1845,7 +1999,18 @@ def _complete_workspace_execution_task(
         or []
     )
 
-    if controlled_arguments:
+    if len(command_sequence) > 1:
+        log_event(
+            mission_id,
+            "Workspace Executor",
+            "command_sequence_fixture",
+            (
+                f"Task {task['position']} is using "
+                f"{len(command_sequence)} controlled "
+                "process invocations for deterministic verification."
+            ),
+        )
+    elif controlled_arguments:
         log_event(
             mission_id,
             "Workspace Executor",
@@ -1873,11 +2038,12 @@ def _complete_workspace_execution_task(
         )
 
     try:
-        evidence = execute_python_artifact(
+        evidence = _execute_controlled_workspace_artifact(
             mission_id,
             artifact_path,
-            stdin_text=controlled_stdin,
-            arguments=controlled_arguments,
+            controlled_stdin=controlled_stdin,
+            controlled_arguments=controlled_arguments,
+            command_sequence=command_sequence,
         )
 
         repair_result = None
@@ -1978,11 +2144,12 @@ def _complete_workspace_execution_task(
                 ),
             )
 
-            evidence = execute_python_artifact(
+            evidence = _execute_controlled_workspace_artifact(
                 mission_id,
                 artifact_path,
-                stdin_text=controlled_stdin,
-            arguments=controlled_arguments,
+                controlled_stdin=controlled_stdin,
+                controlled_arguments=controlled_arguments,
+                command_sequence=command_sequence,
             )
 
         acceptance = _evaluate_execution_acceptance(

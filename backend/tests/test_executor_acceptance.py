@@ -394,3 +394,354 @@ def test_explicit_source_creation_remains_builder_task():
     }
 
     assert _is_builder_task(task) is True
+
+
+def test_extracts_bounded_python_command_sequence():
+    from services import executor
+
+    task = {
+        "title": "Verify Persistence",
+        "instructions": (
+            '- Run `main.py add "Buy milk"` to save the task.\n'
+            '- Run `main.py list` to ensure "Buy milk" is printed.\n'
+            '- Restart the program and re-run `main.py list` to '
+            'confirm persistence.'
+        ),
+    }
+
+    parser = getattr(
+        executor,
+        "_controlled_workspace_command_sequence",
+        None,
+    )
+
+    assert parser is not None
+    assert parser(
+        task,
+        "main.py",
+    ) == [
+        ["add", "Buy milk"],
+        ["list"],
+        ["list"],
+    ]
+
+
+def test_command_sequence_accepts_python_prefixes():
+    from services import executor
+
+    task = {
+        "title": "Verify CLI",
+        "instructions": (
+            '- Run `python main.py add "Buy milk"`.\n'
+            '- Run `python3 main.py list`.'
+        ),
+    }
+
+    parser = getattr(
+        executor,
+        "_controlled_workspace_command_sequence",
+        None,
+    )
+
+    assert parser is not None
+    assert parser(
+        task,
+        "main.py",
+    ) == [
+        ["add", "Buy milk"],
+        ["list"],
+    ]
+
+
+def test_command_sequence_rejects_shell_syntax():
+    from services import executor
+
+    task = {
+        "title": "Verify CLI",
+        "instructions": (
+            '- Run `main.py add "Buy milk" && rm data.db`.\n'
+            '- Run `main.py list`.'
+        ),
+    }
+
+    parser = getattr(
+        executor,
+        "_controlled_workspace_command_sequence",
+        None,
+    )
+
+    assert parser is not None
+    assert parser(
+        task,
+        "main.py",
+    ) == [
+        ["list"],
+    ]
+
+
+def test_command_sequence_rejects_other_artifacts():
+    from services import executor
+
+    task = {
+        "title": "Verify CLI",
+        "instructions": (
+            '- Run `other.py add "Buy milk"`.\n'
+            '- Run `main.py list`.'
+        ),
+    }
+
+    parser = getattr(
+        executor,
+        "_controlled_workspace_command_sequence",
+        None,
+    )
+
+    assert parser is not None
+    assert parser(
+        task,
+        "main.py",
+    ) == [
+        ["list"],
+    ]
+
+
+def test_workspace_execution_selector_uses_sequence_for_multiple_commands(
+    monkeypatch,
+):
+    from services import executor
+
+    calls = []
+
+    def fake_single(
+        mission_id,
+        artifact_path,
+        *,
+        stdin_text=None,
+        arguments=None,
+    ):
+        calls.append(
+            (
+                "single",
+                mission_id,
+                artifact_path,
+                stdin_text,
+                arguments,
+            )
+        )
+        return {"verified": True, "exit_code": 0}
+
+    def fake_sequence(
+        mission_id,
+        artifact_path,
+        argument_steps,
+    ):
+        calls.append(
+            (
+                "sequence",
+                mission_id,
+                artifact_path,
+                argument_steps,
+            )
+        )
+        return {
+            "verified": True,
+            "exit_code": 0,
+            "stdout": "Buy milk\n",
+        }
+
+    monkeypatch.setattr(
+        executor,
+        "execute_python_artifact",
+        fake_single,
+    )
+
+    monkeypatch.setattr(
+        executor,
+        "execute_python_artifact_sequence",
+        fake_sequence,
+        raising=False,
+    )
+
+    selector = getattr(
+        executor,
+        "_execute_controlled_workspace_artifact",
+        None,
+    )
+
+    assert selector is not None
+
+    evidence = selector(
+        9186,
+        "main.py",
+        controlled_stdin=None,
+        controlled_arguments=[
+            "add",
+            "Buy milk",
+        ],
+        command_sequence=[
+            ["add", "Buy milk"],
+            ["list"],
+        ],
+    )
+
+    assert evidence["stdout"] == "Buy milk\n"
+
+    assert calls == [
+        (
+            "sequence",
+            9186,
+            "main.py",
+            [
+                ["add", "Buy milk"],
+                ["list"],
+            ],
+        )
+    ]
+
+
+def test_workspace_execution_selector_preserves_single_command_path(
+    monkeypatch,
+):
+    from services import executor
+
+    calls = []
+
+    def fake_single(
+        mission_id,
+        artifact_path,
+        *,
+        stdin_text=None,
+        arguments=None,
+    ):
+        calls.append(
+            (
+                "single",
+                mission_id,
+                artifact_path,
+                stdin_text,
+                arguments,
+            )
+        )
+        return {
+            "verified": True,
+            "exit_code": 0,
+            "stdout": "Result: 5\n",
+        }
+
+    def fake_sequence(
+        mission_id,
+        artifact_path,
+        argument_steps,
+    ):
+        calls.append(
+            (
+                "sequence",
+                mission_id,
+                artifact_path,
+                argument_steps,
+            )
+        )
+        return {"verified": True, "exit_code": 0}
+
+    monkeypatch.setattr(
+        executor,
+        "execute_python_artifact",
+        fake_single,
+    )
+
+    monkeypatch.setattr(
+        executor,
+        "execute_python_artifact_sequence",
+        fake_sequence,
+        raising=False,
+    )
+
+    selector = getattr(
+        executor,
+        "_execute_controlled_workspace_artifact",
+        None,
+    )
+
+    assert selector is not None
+
+    evidence = selector(
+        9185,
+        "main.py",
+        controlled_stdin=None,
+        controlled_arguments=["2", "3"],
+        command_sequence=[
+            ["2", "3"],
+        ],
+    )
+
+    assert evidence["stdout"] == "Result: 5\n"
+
+    assert calls == [
+        (
+            "single",
+            9185,
+            "main.py",
+            None,
+            ["2", "3"],
+        )
+    ]
+
+
+def test_workspace_execution_selector_preserves_stdin_path(
+    monkeypatch,
+):
+    from services import executor
+
+    calls = []
+
+    def fake_single(
+        mission_id,
+        artifact_path,
+        *,
+        stdin_text=None,
+        arguments=None,
+    ):
+        calls.append(
+            (
+                mission_id,
+                artifact_path,
+                stdin_text,
+                arguments,
+            )
+        )
+        return {
+            "verified": True,
+            "exit_code": 0,
+            "stdout": "Hello, Alice!\n",
+        }
+
+    monkeypatch.setattr(
+        executor,
+        "execute_python_artifact",
+        fake_single,
+    )
+
+    selector = getattr(
+        executor,
+        "_execute_controlled_workspace_artifact",
+        None,
+    )
+
+    assert selector is not None
+
+    selector(
+        9184,
+        "hello.py",
+        controlled_stdin="Alice\n",
+        controlled_arguments=[],
+        command_sequence=[],
+    )
+
+    assert calls == [
+        (
+            9184,
+            "hello.py",
+            "Alice\n",
+            [],
+        )
+    ]
