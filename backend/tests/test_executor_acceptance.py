@@ -745,3 +745,68 @@ def test_workspace_execution_selector_preserves_stdin_path(
             [],
         )
     ]
+
+
+def test_extracts_stdout_requirement_from_ensure_printed_wording():
+    task = {
+        "title": "Verify Persistence",
+        "instructions": (
+            '- Run `main.py add "Buy milk"` to save the task.\n'
+            '- Run `main.py list` to ensure "Buy milk" is printed.\n'
+            "- Restart the program and re-run `list` to confirm "
+            "the task persists across executions.\n\n"
+            'Success-check: The task "Buy milk" must be stored '
+            "in the SQLite database and remain visible after "
+            "closing and reopening the program."
+        ),
+    }
+
+    assert _exact_stdout_requirement(task) == "Buy milk"
+
+
+def test_persistence_acceptance_rejects_wrong_stdout():
+    task = {
+        "title": "Verify Persistence",
+        "instructions": (
+            '- Run `main.py add "Buy milk"` to save the task.\n'
+            '- Run `main.py list` to ensure "Buy milk" is printed.\n'
+            "- Restart the program and re-run `list` to confirm "
+            "the task persists across executions."
+        ),
+    }
+
+    acceptance = _evaluate_execution_acceptance(
+        task,
+        {
+            "stdout": "no such table: tasks\nNo tasks found.\n",
+        },
+    )
+
+    assert acceptance["applicable"] is True
+    assert acceptance["verified"] is False
+    assert acceptance["expected"] == "Buy milk"
+    assert acceptance["actual"] == (
+        "no such table: tasks\nNo tasks found."
+    )
+
+
+def test_ensure_printed_rule_requires_quoted_expected_value():
+    task = {
+        "title": "Verify Output",
+        "instructions": (
+            "Run the program and ensure the task is printed."
+        ),
+    }
+
+    assert _exact_stdout_requirement(task) is None
+
+
+def test_ensure_printed_rule_does_not_match_other_verbs():
+    task = {
+        "title": "Verify Output",
+        "instructions": (
+            'Run the program and ensure "Buy milk" is logged.'
+        ),
+    }
+
+    assert _exact_stdout_requirement(task) is None
