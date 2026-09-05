@@ -962,6 +962,25 @@ def _is_workspace_execution_task(task: Any) -> bool:
     if _exact_stdout_requirement(task) is not None:
         return True
 
+    explicit_artifacts = [
+        match.group("path")
+        for match in PYTHON_ARTIFACT_PATTERN.finditer(task_text)
+    ]
+
+    artifact_path = (
+        explicit_artifacts[0]
+        if explicit_artifacts
+        else "main.py"
+    )
+
+    command_sequence = _controlled_workspace_command_sequence(
+        task,
+        artifact_path,
+    )
+
+    if any(arguments for arguments in command_sequence):
+        return True
+
     return bool(
         WORKSPACE_EXECUTION_PATTERN.search(task_text)
     )

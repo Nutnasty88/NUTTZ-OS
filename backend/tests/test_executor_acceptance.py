@@ -1004,3 +1004,62 @@ def test_workspace_execution_selector_single_sequence_overrides_empty_legacy_arg
     )
 
     assert calls == [["list"]]
+
+
+def test_real_task_app_success_check_routes_to_workspace_executor():
+    task = {
+        "title": "Success-Check",
+        "instructions": (
+            "Confirm that:  \n"
+            '   - `main.py add "Buy milk"` stores the task exactly.  \n'
+            "   - `main.py list` outputs `Buy milk` immediately after adding.  \n"
+            "   - The task is still visible after restarting the program."
+        ),
+    }
+
+    assert _controlled_workspace_command_sequence(
+        task,
+        "main.py",
+    ) == [
+        ["add", "Buy milk"],
+        ["list"],
+    ]
+
+    assert _is_workspace_execution_task(task) is True
+    assert _is_builder_task(task) is False
+
+
+def test_real_task_app_persistence_check_routes_to_workspace_executor():
+    task = {
+        "title": "Verify Persistence Across Restarts",
+        "instructions": (
+            "Restart the program after adding a task and re-run "
+            "`main.py list` to confirm the task remains in the database."
+        ),
+    }
+
+    assert _controlled_workspace_command_sequence(
+        task,
+        "main.py",
+    ) == [["list"]]
+
+    assert _is_workspace_execution_task(task) is True
+    assert _is_builder_task(task) is False
+
+
+def test_bare_entrypoint_reference_does_not_force_workspace_execution():
+    task = {
+        "title": "Implement Command-Line Parsing",
+        "instructions": (
+            "Use argparse in `main.py` to support the add and list "
+            "commands."
+        ),
+    }
+
+    assert _controlled_workspace_command_sequence(
+        task,
+        "main.py",
+    ) == [[]]
+
+    assert _is_builder_task(task) is True
+    assert _is_workspace_execution_task(task) is False
