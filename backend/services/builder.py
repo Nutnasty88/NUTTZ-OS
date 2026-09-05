@@ -1,5 +1,6 @@
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from app.services.events import log_event
@@ -18,6 +19,50 @@ BUILDER_MODEL = "hf.co/RootMonsteR/Qwen3-14B-Abliterated-GGUF:Q4_K_M"
 MAX_BUILDER_FILES = 20
 
 MAX_WORKSPACE_CONTEXT_BYTES = 24000
+
+BUILDER_RUNTIME_BINARY_SUFFIXES = {
+    ".bin",
+    ".bmp",
+    ".db",
+    ".dll",
+    ".exe",
+    ".gif",
+    ".gz",
+    ".ico",
+    ".jpeg",
+    ".jpg",
+    ".pdf",
+    ".png",
+    ".pyc",
+    ".so",
+    ".sqlite",
+    ".sqlite3",
+    ".tar",
+    ".webp",
+    ".zip",
+}
+
+
+def _validate_builder_text_artifact_path(path: str) -> str:
+    """
+    Validate a Builder-managed UTF-8 text artifact path.
+
+    Builder Agent v1 writes text source/configuration artifacts only.
+    Runtime state and binary artifacts must be created by executing the
+    generated application, not synthesized as model-provided text.
+    """
+    normalized = path.strip()
+
+    suffix = Path(normalized).suffix.lower()
+
+    if suffix in BUILDER_RUNTIME_BINARY_SUFFIXES:
+        raise RuntimeError(
+            "Builder Agent v1 cannot create runtime or binary artifact "
+            f'"{normalized}". Generate source code that creates this '
+            "artifact at runtime instead."
+        )
+
+    return normalized
 
 
 def _workspace_name(mission_id: int) -> str:
@@ -136,9 +181,13 @@ def _parse_builder_response(
                 f"Builder file entry {index} has no text content."
             )
 
+        normalized_path = _validate_builder_text_artifact_path(
+            path
+        )
+
         normalized_files.append(
             {
-                "path": path.strip(),
+                "path": normalized_path,
                 "content": file_content,
             }
         )
