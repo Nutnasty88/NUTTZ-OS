@@ -577,6 +577,7 @@ def launch_verified_project(
 
     from services.workspace_manager import (
         PROJECT_MANIFEST_PATH,
+        _is_runtime_state_path,
     )
 
     workspace_name = _workspace_name(mission_id)
@@ -726,7 +727,10 @@ def launch_verified_project(
     current_paths = {
         item["path"]
         for item in current_listing["files"]
-        if item["path"] != PROJECT_MANIFEST_PATH
+        if (
+            item["path"] != PROJECT_MANIFEST_PATH
+            and not _is_runtime_state_path(item["path"])
+        )
     }
 
     expected_paths = set(expected_files)

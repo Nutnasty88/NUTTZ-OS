@@ -478,6 +478,25 @@ def write_workspace_file(
 
 PROJECT_MANIFEST_PATH = "nuttz-project.json"
 
+RUNTIME_STATE_SUFFIXES = {
+    ".db",
+    ".sqlite",
+    ".sqlite3",
+}
+
+
+def _is_runtime_state_path(relative_path: str) -> bool:
+    """
+    Return True for mutable runtime state that must not be treated as
+    immutable Builder source in the verified project manifest.
+    """
+    if not isinstance(relative_path, str):
+        return False
+
+    suffix = Path(relative_path.strip()).suffix.lower()
+
+    return suffix in RUNTIME_STATE_SUFFIXES
+
 
 def write_project_manifest(
     workspace_name: str,
@@ -580,6 +599,9 @@ def write_project_manifest(
         relative_path = file_record["path"]
 
         if relative_path == PROJECT_MANIFEST_PATH:
+            continue
+
+        if _is_runtime_state_path(relative_path):
             continue
 
         current_file = read_workspace_file(
