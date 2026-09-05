@@ -2,6 +2,8 @@ import sqlite3
 
 from services.executor import (
     _controlled_workspace_arguments,
+    _controlled_workspace_command_sequence,
+    _execute_controlled_workspace_artifact,
     _controlled_workspace_stdin,
     _evaluate_execution_acceptance,
     _evidence_requirement,
@@ -850,3 +852,155 @@ def test_displayed_exactly_as_acceptance_rejects_wrong_stdout():
     assert acceptance["verified"] is False
     assert acceptance["expected"] == "Buy milk"
     assert acceptance["actual"] == "No tasks found."
+
+
+def test_extracts_arguments_from_single_quoted_python_command():
+    task = {
+        "title": (
+            'Test \'main.py add "Buy milk"\' '
+            "to verify task is saved to database"
+        ),
+        "instructions": (
+            'Test \'main.py add "Buy milk"\' '
+            "to verify task is saved to database"
+        ),
+    }
+
+    assert _controlled_workspace_arguments(
+        task,
+        "main.py",
+    ) == ["add", "Buy milk"]
+
+
+def test_extracts_sequence_from_single_quoted_python_commands():
+    task = {
+        "title": "Verify persistence",
+        "instructions": (
+            'Run \'main.py add "Buy milk"\', then '
+            "run 'main.py list'."
+        ),
+    }
+
+    assert _controlled_workspace_command_sequence(
+        task,
+        "main.py",
+    ) == [
+        ["add", "Buy milk"],
+        ["list"],
+    ]
+
+
+def test_single_quoted_command_rejects_shell_control_syntax():
+    task = {
+        "title": "Test application",
+        "instructions": (
+            "Run 'main.py list; whoami' and verify it works."
+        ),
+    }
+
+    assert _controlled_workspace_arguments(
+        task,
+        "main.py",
+    ) == []
+
+    assert _controlled_workspace_command_sequence(
+        task,
+        "main.py",
+    ) == []
+
+
+def test_command_sequence_deduplicates_identical_title_and_instructions():
+    task = {
+        "title": (
+            'Test \'main.py add "Buy milk"\' '
+            "to verify task is saved to database"
+        ),
+        "instructions": (
+            'Test \'main.py add "Buy milk"\' '
+            "to verify task is saved to database"
+        ),
+    }
+
+    assert _controlled_workspace_command_sequence(
+        task,
+        "main.py",
+    ) == [
+        ["add", "Buy milk"],
+    ]
+
+
+def test_workspace_execution_selector_uses_single_sequence_arguments(
+    monkeypatch,
+):
+    calls = []
+
+    def fake_execute(
+        mission_id,
+        artifact_path,
+        *,
+        stdin_text=None,
+        arguments=None,
+    ):
+        calls.append(
+            (
+                mission_id,
+                artifact_path,
+                stdin_text,
+                arguments,
+            )
+        )
+        return {"verified": True, "exit_code": 0}
+
+    monkeypatch.setattr(
+        "services.executor.execute_python_artifact",
+        fake_execute,
+    )
+
+    result = _execute_controlled_workspace_artifact(
+        9188,
+        "main.py",
+        controlled_stdin=None,
+        controlled_arguments=[],
+        command_sequence=[["add", "Buy milk"]],
+    )
+
+    assert result["verified"] is True
+    assert calls == [
+        (
+            9188,
+            "main.py",
+            None,
+            ["add", "Buy milk"],
+        )
+    ]
+
+
+def test_workspace_execution_selector_single_sequence_overrides_empty_legacy_arguments(
+    monkeypatch,
+):
+    calls = []
+
+    def fake_execute(
+        mission_id,
+        artifact_path,
+        *,
+        stdin_text=None,
+        arguments=None,
+    ):
+        calls.append(arguments)
+        return {"verified": True, "exit_code": 0}
+
+    monkeypatch.setattr(
+        "services.executor.execute_python_artifact",
+        fake_execute,
+    )
+
+    _execute_controlled_workspace_artifact(
+        9188,
+        "main.py",
+        controlled_stdin=None,
+        controlled_arguments=[],
+        command_sequence=[["list"]],
+    )
+
+    assert calls == [["list"]]

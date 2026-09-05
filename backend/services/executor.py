@@ -472,13 +472,13 @@ OUTPUT_VALUE_EXACTLY_STDOUT_PATTERN = re.compile(
 
 CONTROLLED_PYTHON_COMMAND_PATTERN = re.compile(
     r"""
-    `
+    (?P<delimiter>`|')
     (?P<command>
         (?:(?:python|python3)\s+)?
         [A-Za-z0-9_.\-/]+\.py
-        (?:\s+[A-Za-z0-9_.-]+){1,8}
+        (?:\s+(?:"[^"\r\n`']+"|[A-Za-z0-9_.-]+)){1,8}
     )
-    `
+    (?P=delimiter)
     """,
     flags=re.IGNORECASE | re.VERBOSE,
 )
@@ -597,8 +597,18 @@ CONTROLLED_COMMAND_SEQUENCE_LIMIT = 4
 CONTROLLED_COMMAND_ARGUMENT_LIMIT = 8
 CONTROLLED_COMMAND_ARGUMENT_BYTES_LIMIT = 512
 
-CONTROLLED_BACKTICK_PATTERN = re.compile(
-    r"`(?P<command>[^`\r\n]{1,512})`"
+CONTROLLED_QUOTED_COMMAND_PATTERN = re.compile(
+    r"""
+    (?P<delimiter>`|')
+    (?P<command>
+        (?:
+            "(?:[^"\\\r\n]|\\.)*"|
+            [^`'\r\n]
+        ){1,512}?
+    )
+    (?P=delimiter)
+    """,
+    flags=re.VERBOSE,
 )
 
 CONTROLLED_SHELL_TOKEN_PATTERN = re.compile(
@@ -617,10 +627,16 @@ def _controlled_workspace_command_sequence(
     executed. Each invocation must target the requested Python artifact,
     contain bounded arguments, and contain no shell control syntax.
     """
-    task_text = (
-        f"{task['title']}\n"
-        f"{task['instructions']}"
-    )
+    title_text = str(task["title"])
+    instructions_text = str(task["instructions"])
+
+    if title_text == instructions_text:
+        task_text = title_text
+    else:
+        task_text = (
+            f"{title_text}\n"
+            f"{instructions_text}"
+        )
 
     artifact_name = artifact_path.rsplit(
         "/",
@@ -629,7 +645,7 @@ def _controlled_workspace_command_sequence(
 
     commands: list[list[str]] = []
 
-    for match in CONTROLLED_BACKTICK_PATTERN.finditer(
+    for match in CONTROLLED_QUOTED_COMMAND_PATTERN.finditer(
         task_text
     ):
         raw_command = match.group("command").strip()
@@ -728,12 +744,23 @@ def _controlled_workspace_arguments(
         maxsplit=1,
     )[-1]
 
-    for match in CONTROLLED_PYTHON_COMMAND_PATTERN.finditer(
+    matched_controlled_command = False
+
+    for match in CONTROLLED_QUOTED_COMMAND_PATTERN.finditer(
         task_text
     ):
+        raw_command = match.group("command").strip()
+
+        if CONTROLLED_SHELL_TOKEN_PATTERN.search(
+            raw_command
+        ):
+            if match.group("delimiter") == "'":
+                matched_controlled_command = True
+            continue
+
         try:
             tokens = shlex.split(
-                match.group("command"),
+                raw_command,
                 posix=True,
             )
         except ValueError:
@@ -763,6 +790,8 @@ def _controlled_workspace_arguments(
         if command_artifact != artifact_name:
             continue
 
+        matched_controlled_command = True
+
         if not 1 <= len(arguments) <= 8:
             continue
 
@@ -776,7 +805,12 @@ def _controlled_workspace_arguments(
         )
 
         positional_arguments = all(
-            SAFE_TASK_ARGUMENT_PATTERN.fullmatch(argument)
+            isinstance(argument, str)
+            and "\x00" not in argument
+            and "\n" not in argument
+            and "\r" not in argument
+            and len(argument.encode("utf-8"))
+            <= CONTROLLED_COMMAND_ARGUMENT_BYTES_LIMIT
             for argument in arguments
         )
 
@@ -787,6 +821,9 @@ def _controlled_workspace_arguments(
             continue
 
         return arguments
+
+    if matched_controlled_command:
+        return []
 
     expected_stdout = _exact_stdout_requirement(
         task
@@ -833,6 +870,14 @@ def _execute_controlled_workspace_artifact(
             mission_id,
             artifact_path,
             command_sequence,
+        )
+
+    if len(command_sequence) == 1:
+        return execute_python_artifact(
+            mission_id,
+            artifact_path,
+            stdin_text=controlled_stdin,
+            arguments=command_sequence[0],
         )
 
     return execute_python_artifact(
