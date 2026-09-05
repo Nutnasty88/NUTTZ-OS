@@ -91,6 +91,15 @@ Rules:
 - Do not include <think> tags.
 - Use numbered tasks in execution order.
 - Give each task a short title and clear action.
+- For any task that creates or changes application behavior, explicitly
+  describe it as an implementation task using a verb such as Implement,
+  Modify, Update, or Create.
+- When an implementation task changes a known source file, name that
+  source file explicitly in the task action.
+- Do not describe required code changes only as desired runtime behavior.
+  For example, prefer "Implement task insertion in task_manager.py" over
+  "When add is called, insert the task into the database."
+- Keep execution or verification tasks separate from implementation tasks.
 - Include a final success-check section.
 - Keep the plan focused and practical.
 """.strip()
