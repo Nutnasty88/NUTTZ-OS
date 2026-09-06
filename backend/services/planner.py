@@ -94,8 +94,9 @@ Rules:
 - For any task that creates or changes application behavior, explicitly
   describe it as an implementation task using a verb such as Implement,
   Modify, Update, or Create.
-- When an implementation task changes a known source file, name that
-  source file explicitly in the task action.
+- Every implementation task must name the source file it creates or changes
+  explicitly in the task action. If the source file is already known from
+  earlier plan steps, repeat its filename rather than relying on context.
 - Do not describe required code changes only as desired runtime behavior.
   For example, prefer "Implement task insertion in task_manager.py" over
   "When add is called, insert the task into the database."
@@ -109,6 +110,16 @@ Rules:
   use a file-backed SQLite database created by application source code at
   runtime. Do not plan an in-memory SQLite database for persistent state.
 - Include a final success-check section.
+- When success depends on a sequence of command-line executions, write every
+  required command explicitly and in execution order in the success-check.
+  Do not summarize a required command as prose such as "after adding a task".
+- When a success-check verifies persistence across a restart or fresh process,
+  explicitly include the command that creates the state, the command that
+  verifies it before restart when required by the mission, and the command
+  that verifies it again after restart.
+- Preserve concrete sample arguments from the mission in those commands.
+  For example, if the mission requires main.py add "Buy milk" followed by
+  main.py list, include those literal commands in the success-check.
 - Keep the plan focused and practical.
 """.strip()
 

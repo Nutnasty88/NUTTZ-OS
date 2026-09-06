@@ -112,7 +112,13 @@ def test_create_plan_requires_explicit_implementation_tasks(
         in normalized_prompt
     )
     assert (
-        "name that source file explicitly"
+        "Every implementation task must name the source file it creates "
+        "or changes explicitly in the task action."
+        in normalized_prompt
+    )
+
+    assert (
+        "repeat its filename rather than relying on context."
         in normalized_prompt
     )
     assert (
@@ -154,5 +160,30 @@ def test_create_plan_requires_explicit_implementation_tasks(
 
     assert (
         "Do not plan an in-memory SQLite database for persistent state."
+        in normalized_prompt
+    )
+
+    assert (
+        "When success depends on a sequence of command-line executions, "
+        "write every required command explicitly and in execution order "
+        "in the success-check."
+        in normalized_prompt
+    )
+
+    assert (
+        "Do not summarize a required command as prose such as "
+        "\"after adding a task\"."
+        in normalized_prompt
+    )
+
+    assert (
+        "When a success-check verifies persistence across a restart or "
+        "fresh process, explicitly include the command that creates the "
+        "state"
+        in normalized_prompt
+    )
+
+    assert (
+        'main.py add "Buy milk" followed by main.py list'
         in normalized_prompt
     )
