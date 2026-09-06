@@ -1087,3 +1087,57 @@ def test_bare_entrypoint_reference_does_not_force_workspace_execution():
 
     assert _is_builder_task(task) is True
     assert _is_workspace_execution_task(task) is False
+
+
+def test_command_sequence_extracts_plain_commands_from_success_check():
+    task = {
+        "title": (
+            'Verify task persistence by restarting the application '
+            'and confirming "Buy milk" remains in list'
+        ),
+        "instructions": (
+            'Success-check: After executing main.py add "Buy milk" '
+            'and restarting the application, main.py list should '
+            'display exactly "Buy milk" in the task list.'
+        ),
+    }
+
+    assert _controlled_workspace_command_sequence(
+        task,
+        "main.py",
+    ) == [
+        ["add", "Buy milk"],
+        ["list"],
+    ]
+
+
+def test_plain_command_sequence_accepts_python_prefix():
+    task = {
+        "title": "Verify persistence",
+        "instructions": (
+            'Execute python3 main.py add "Buy milk" and then '
+            'python3 main.py list should display the task.'
+        ),
+    }
+
+    assert _controlled_workspace_command_sequence(
+        task,
+        "main.py",
+    ) == [
+        ["add", "Buy milk"],
+        ["list"],
+    ]
+
+
+def test_plain_command_sequence_rejects_shell_control_syntax():
+    task = {
+        "title": "Verify application",
+        "instructions": (
+            "Execute main.py list; whoami and verify the output."
+        ),
+    }
+
+    assert _controlled_workspace_command_sequence(
+        task,
+        "main.py",
+    ) == []

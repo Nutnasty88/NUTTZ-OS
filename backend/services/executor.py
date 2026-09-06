@@ -616,6 +616,43 @@ CONTROLLED_SHELL_TOKEN_PATTERN = re.compile(
 )
 
 
+CONTROLLED_PLAIN_COMMAND_PATTERN = re.compile(
+    r"""
+    (?<![`'])
+    (?P<command>
+        (?:(?:python|python3)\s+)?
+        [A-Za-z0-9_.\-/]+\.py
+        (?:
+            \s+
+            (?:
+                "[^"\\\r\n]+"
+                |
+                (?!
+                    (?:
+                        and|then|to|should|must|will|after|before|
+                        when|while|so|which|that|with
+                    )\b
+                )
+                [A-Za-z0-9_.-]+
+            )
+        ){1,8}
+    )
+    (?=
+        \s*
+        (?:
+            [,.:!?)]|
+            $|
+            \b(?:
+                and|then|to|should|must|will|after|before|
+                when|while|so|which|that|with
+            )\b
+        )
+    )
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
 def _controlled_workspace_command_sequence(
     task: Any,
     artifact_path: str,
@@ -719,6 +756,70 @@ def _controlled_workspace_command_sequence(
 
         if len(commands) >= CONTROLLED_COMMAND_SEQUENCE_LIMIT:
             break
+
+    if len(commands) < CONTROLLED_COMMAND_SEQUENCE_LIMIT:
+        for match in CONTROLLED_PLAIN_COMMAND_PATTERN.finditer(
+            task_text
+        ):
+            raw_command = match.group("command").strip()
+
+            if CONTROLLED_SHELL_TOKEN_PATTERN.search(
+                raw_command
+            ):
+                continue
+
+            try:
+                tokens = shlex.split(
+                    raw_command,
+                    posix=True,
+                )
+            except ValueError:
+                continue
+
+            if not tokens:
+                continue
+
+            executable = tokens[0].lower()
+
+            if executable in {"python", "python3"}:
+                if len(tokens) < 3:
+                    continue
+
+                target = tokens[1]
+                arguments = tokens[2:]
+            else:
+                if len(tokens) < 2:
+                    continue
+
+                target = tokens[0]
+                arguments = tokens[1:]
+
+            target_name = target.rsplit("/", maxsplit=1)[-1]
+
+            if target_name != artifact_name:
+                continue
+
+            if (
+                not arguments
+                or len(arguments)
+                > CONTROLLED_COMMAND_ARGUMENT_LIMIT
+            ):
+                continue
+
+            if any(
+                "\x00" in argument
+                or "\n" in argument
+                or "\r" in argument
+                or len(argument.encode("utf-8"))
+                > CONTROLLED_COMMAND_ARGUMENT_BYTES_LIMIT
+                for argument in arguments
+            ):
+                continue
+
+            commands.append(arguments)
+
+            if len(commands) >= CONTROLLED_COMMAND_SEQUENCE_LIMIT:
+                break
 
     return commands
 
