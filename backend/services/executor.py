@@ -4007,6 +4007,8 @@ def reset_error_task(
                 "before it could be reset."
             )
 
+        mission_status = mission["status"]
+
         cursor = conn.execute(
             """
             UPDATE missions
@@ -4014,9 +4016,12 @@ def reset_error_task(
                 status='Running',
                 updated_at=CURRENT_TIMESTAMP
             WHERE id=?
-              AND status='Error'
+              AND status=?
             """,
-            (mission_id,),
+            (
+                mission_id,
+                mission_status,
+            ),
         )
 
         if cursor.rowcount != 1:
