@@ -72,6 +72,18 @@ def ensure_task_table() -> None:
 
 
 def parse_plan_tasks(plan: str) -> list[dict[str, Any]]:
+    success_check = ""
+
+    success_match = re.search(
+        r"^\s*Success-check:\s*(?:\r?\n|$)",
+        plan,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    if success_match is not None:
+        success_check = plan[success_match.end():].strip()
+        plan = plan[:success_match.start()].rstrip()
+
     pattern = re.compile(
         r"^\s*(\d+)\.\s*(.+?)(?=^\s*\d+\.\s*|\Z)",
         re.MULTILINE | re.DOTALL,
@@ -117,6 +129,13 @@ def parse_plan_tasks(plan: str) -> list[dict[str, Any]]:
                 "title": "Execute mission plan",
                 "instructions": plan.strip(),
             }
+        )
+
+    if tasks and success_check:
+        tasks[-1]["instructions"] = (
+            tasks[-1]["instructions"].rstrip()
+            + "\n\nSuccess-check:\n"
+            + success_check
         )
 
     return tasks
@@ -675,6 +694,15 @@ def _controlled_workspace_command_sequence(
             f"{title_text}\n"
             f"{instructions_text}"
         )
+
+    success_match = re.search(
+        r"^\s*Success-check:\s*(?:\r?\n|$)",
+        task_text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    if success_match is not None:
+        task_text = task_text[success_match.end():]
 
     artifact_name = artifact_path.rsplit(
         "/",
