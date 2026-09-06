@@ -120,6 +120,12 @@ Rules:
 - Preserve concrete sample arguments from the mission in those commands.
   For example, if the mission requires main.py add "Buy milk" followed by
   main.py list, include those literal commands in the success-check.
+- When the mission specifies exact expected output, preserve that requirement
+  explicitly in the success-check. Do not leave exact-output requirements only
+  in the mission title or summarize them away.
+- Express exact stdout deterministically using wording such as:
+  stdout must equal "Buy milk"
+  so the Executor can verify the expected output against execution evidence.
 - Keep the plan focused and practical.
 """.strip()
 

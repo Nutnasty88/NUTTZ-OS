@@ -187,3 +187,14 @@ def test_create_plan_requires_explicit_implementation_tasks(
         'main.py add "Buy milk" followed by main.py list'
         in normalized_prompt
     )
+
+    assert (
+        "When the mission specifies exact expected output, preserve that "
+        "requirement explicitly in the success-check."
+        in normalized_prompt
+    )
+
+    assert (
+        'stdout must equal "Buy milk"'
+        in normalized_prompt
+    )
