@@ -1166,3 +1166,21 @@ def test_plain_command_sequence_is_line_bounded_and_ignores_shell_restart():
         ["list"],
         ["list"],
     ]
+
+
+def test_plain_sequence_splits_commands_separated_by_followed_by():
+    task = {
+        "title": "Verify task addition and listing",
+        "instructions": (
+            'Action: Execute main.py add "Buy milk" followed by '
+            'main.py list to confirm task is displayed'
+        ),
+    }
+
+    assert _controlled_workspace_command_sequence(
+        task,
+        "main.py",
+    ) == [
+        ["add", "Buy milk"],
+        ["list"],
+    ]
