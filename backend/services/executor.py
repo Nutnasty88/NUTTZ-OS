@@ -2677,6 +2677,7 @@ CODE_IMPLEMENTATION_PATTERN = re.compile(
         \bsys\.argv\b|
         \bcommand[- ]line\s+argument(?:s|\s+parsing)?\b|
         \bargument\s+parsing\b|
+        \bcommand\s+logic\b|
         \bfunction\b|
         \bclass\b|
         \bimport\b|

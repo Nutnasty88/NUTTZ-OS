@@ -314,6 +314,30 @@ def test_implementation_of_command_line_parsing_is_builder_task():
     assert _is_builder_task(task) is True
 
 
+def test_implementation_of_add_command_logic_is_builder_task():
+    task = {
+        "title": "Implement 'add' command logic to insert a task",
+        "instructions": (
+            "Implement 'add' command logic to insert a task into "
+            "the 'tasks' table."
+        ),
+    }
+
+    assert _is_builder_task(task) is True
+
+
+def test_implementation_of_list_command_logic_is_builder_task():
+    task = {
+        "title": "Implement 'list' command logic to select tasks",
+        "instructions": (
+            "Implement 'list' command logic to select and print "
+            "all tasks from the 'tasks' table."
+        ),
+    }
+
+    assert _is_builder_task(task) is True
+
+
 def test_generic_implementation_without_code_context_is_not_builder_task():
     task = {
         "title": "Implement the process",
