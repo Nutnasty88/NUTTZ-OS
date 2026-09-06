@@ -369,48 +369,8 @@ def test_golden_worker_completes_tasks_and_deliverable(
 
     state = autonomous_worker.get_worker_status()
 
-    print("\n===== GOLDEN WORKER STATE =====")
-    print(state)
-    print("mission:", dict(mission))
-    print(
-        "tasks:",
-        [dict(row) for row in tasks],
-    )
-    print(
-        "deliverable:",
-        dict(deliverable)
-        if deliverable is not None
-        else None,
-    )
-    print(
-        "lease:",
-        dict(lease_row)
-        if lease_row is not None
-        else None,
-    )
-
     assert state["last_error"] == ""
     state = autonomous_worker.get_worker_status()
-
-    print("\n===== GOLDEN WORKER STATE =====")
-    print(state)
-    print("mission:", dict(mission))
-    print(
-        "tasks:",
-        [dict(row) for row in tasks],
-    )
-    print(
-        "deliverable:",
-        dict(deliverable)
-        if deliverable is not None
-        else None,
-    )
-    print(
-        "lease:",
-        dict(lease_row)
-        if lease_row is not None
-        else None,
-    )
 
     assert state["last_error"] == ""
     assert mission["status"] == "Completed"
