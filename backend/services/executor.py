@@ -620,10 +620,10 @@ CONTROLLED_PLAIN_COMMAND_PATTERN = re.compile(
     r"""
     (?<![`'])
     (?P<command>
-        (?:(?:python|python3)\s+)?
+        (?:(?:python|python3)[ \t]+)?
         [A-Za-z0-9_.\-/]+\.py
         (?:
-            \s+
+            [ \t]+
             (?:
                 "[^"\\\r\n]+"
                 |
@@ -638,9 +638,10 @@ CONTROLLED_PLAIN_COMMAND_PATTERN = re.compile(
         ){1,8}
     )
     (?=
-        \s*
+        [ \t]*
         (?:
             [,.:!?)]|
+            \r?\n|
             $|
             \b(?:
                 and|then|to|should|must|will|after|before|

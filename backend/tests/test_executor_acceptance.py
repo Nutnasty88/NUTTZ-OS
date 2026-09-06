@@ -1141,3 +1141,28 @@ def test_plain_command_sequence_rejects_shell_control_syntax():
         task,
         "main.py",
     ) == []
+
+
+def test_plain_command_sequence_is_line_bounded_and_ignores_shell_restart():
+    task = {
+        "title": (
+            "Verify persistence by restarting the application "
+            "and rechecking task list"
+        ),
+        "instructions": (
+            'Success-check:\n'
+            'main.py add "Buy milk"\n'
+            'main.py list\n'
+            'killall python && sleep 2\n'
+            'main.py list'
+        ),
+    }
+
+    assert _controlled_workspace_command_sequence(
+        task,
+        "main.py",
+    ) == [
+        ["add", "Buy milk"],
+        ["list"],
+        ["list"],
+    ]
