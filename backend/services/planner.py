@@ -135,6 +135,7 @@ Current status: {mission["status"]}
             },
         ],
         stream=False,
+        timeout=300,
     )
 
     plan = extract_plan(response)

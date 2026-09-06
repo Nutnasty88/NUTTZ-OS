@@ -57,10 +57,17 @@ def test_create_plan_requires_explicit_implementation_tasks(
 
     captured = {}
 
-    def fake_chat_with_ollama(*, model, messages, stream):
+    def fake_chat_with_ollama(
+        *,
+        model,
+        messages,
+        stream,
+        timeout,
+    ):
         captured["model"] = model
         captured["messages"] = messages
         captured["stream"] = stream
+        captured["timeout"] = timeout
 
         return {
             "message": {
@@ -91,6 +98,7 @@ def test_create_plan_requires_explicit_implementation_tasks(
     result = planner.create_plan(1)
 
     assert result["status"] == "Ready"
+    assert captured["timeout"] == 300
 
     system_prompt = captured["messages"][0]["content"]
     normalized_prompt = " ".join(system_prompt.split())
