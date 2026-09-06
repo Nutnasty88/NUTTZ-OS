@@ -136,3 +136,15 @@ def test_create_plan_requires_explicit_implementation_tasks(
         ".sqlite, or .sqlite3 file directly."
         in normalized_prompt
     )
+
+    assert (
+        "When the mission requires data to persist across program or "
+        "process restarts, use a file-backed SQLite database created by "
+        "application source code at runtime."
+        in normalized_prompt
+    )
+
+    assert (
+        "Do not plan an in-memory SQLite database for persistent state."
+        in normalized_prompt
+    )

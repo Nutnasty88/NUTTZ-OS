@@ -105,6 +105,9 @@ Rules:
 - For SQLite-backed applications, plan implementation work that creates or
   initializes the database from source code at runtime. Do not create a task
   whose action is to synthesize a .db, .sqlite, or .sqlite3 file directly.
+- When the mission requires data to persist across program or process restarts,
+  use a file-backed SQLite database created by application source code at
+  runtime. Do not plan an in-memory SQLite database for persistent state.
 - Include a final success-check section.
 - Keep the plan focused and practical.
 """.strip()
