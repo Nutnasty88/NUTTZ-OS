@@ -100,6 +100,11 @@ Rules:
   For example, prefer "Implement task insertion in task_manager.py" over
   "When add is called, insert the task into the database."
 - Keep execution or verification tasks separate from implementation tasks.
+- Treat databases and other mutable runtime state as runtime artifacts, not
+  Builder-created files.
+- For SQLite-backed applications, plan implementation work that creates or
+  initializes the database from source code at runtime. Do not create a task
+  whose action is to synthesize a .db, .sqlite, or .sqlite3 file directly.
 - Include a final success-check section.
 - Keep the plan focused and practical.
 """.strip()

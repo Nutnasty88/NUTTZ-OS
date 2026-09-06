@@ -438,6 +438,12 @@ Rules:
 - Never request ../ path traversal.
 - Never write .git or .env files.
 - Return complete file contents, not patches.
+- Create or modify UTF-8 source, configuration, documentation, and other
+  text artifacts only.
+- Never return databases or other mutable runtime/binary state in "files".
+- For SQLite applications, implement database creation and initialization
+  in source code so execution creates .db, .sqlite, or .sqlite3 files at
+  runtime.
 - You may create multiple files when the task requires a project.
 - For a runnable Python application or project, set "entrypoint" to the
   relative Python file that should be executed, normally main.py.

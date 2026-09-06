@@ -117,3 +117,22 @@ def test_create_plan_requires_explicit_implementation_tasks(
         "implementation tasks."
         in normalized_prompt
     )
+
+    assert (
+        "Treat databases and other mutable runtime state as "
+        "runtime artifacts, not Builder-created files."
+        in normalized_prompt
+    )
+
+    assert (
+        "For SQLite-backed applications, plan implementation work "
+        "that creates or initializes the database from source code "
+        "at runtime."
+        in normalized_prompt
+    )
+
+    assert (
+        "Do not create a task whose action is to synthesize a .db, "
+        ".sqlite, or .sqlite3 file directly."
+        in normalized_prompt
+    )
