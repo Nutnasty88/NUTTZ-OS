@@ -256,6 +256,94 @@ def test_manifest_denies_unsafe_argument(
         launch_verified_project(12004)
 
 
+def test_manifest_allows_sqlite_runtime_state_created_after_verification(
+    isolated_builder_root,
+):
+    import sqlite3
+
+    mission_id = 12008
+    workspace_name = create_project(
+        mission_id,
+        'print("READY")\n',
+        [],
+    )
+
+    database_path = (
+        isolated_builder_root
+        / workspace_name
+        / "tasks.db"
+    )
+
+    connection = sqlite3.connect(database_path)
+
+    try:
+        connection.execute(
+            """
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY,
+                task TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO tasks (task) VALUES (?)",
+            ("Buy milk",),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    launch = launch_verified_project(mission_id)
+
+    assert launch["success"] is True
+    assert launch["execution"]["verified"] is True
+    assert launch["execution"]["stdout"] == "READY\n"
+
+    manifest = workspace_manager.read_workspace_file(
+        workspace_name,
+        workspace_manager.PROJECT_MANIFEST_PATH,
+    )
+
+    assert '"tasks.db"' not in manifest["content"]
+
+    connection = sqlite3.connect(
+        f"file:{database_path}?mode=ro",
+        uri=True,
+    )
+
+    try:
+        rows = connection.execute(
+            "SELECT id, task FROM tasks ORDER BY id"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert rows == [(1, "Buy milk")]
+
+
+def test_manifest_still_denies_unexpected_source_file(
+    isolated_builder_root,
+):
+    mission_id = 12009
+    workspace_name = create_project(
+        mission_id,
+        'print("READY")\n',
+        [],
+    )
+
+    workspace_manager.write_workspace_file(
+        workspace_name,
+        "unexpected.py",
+        'print("UNVERIFIED")\n',
+    )
+
+    with pytest.raises(
+        WorkspaceExecutionError,
+        match="unexpected files: unexpected.py",
+    ):
+        launch_verified_project(mission_id)
+
+
 def test_controlled_argument_validation_accepts_bounded_spaces():
     assert _validate_controlled_arguments(
         ["add", "Buy milk"]
