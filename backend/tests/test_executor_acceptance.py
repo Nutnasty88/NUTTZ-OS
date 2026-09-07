@@ -1184,3 +1184,18 @@ def test_plain_sequence_splits_commands_separated_by_followed_by():
         ["add", "Buy milk"],
         ["list"],
     ]
+
+
+def test_plain_command_sequence_ignores_using_prose_after_artifact():
+    task = {
+        "title": "Implement SQLite database setup",
+        "instructions": (
+            "Create database connection in main.py using SQLAlchemy "
+            "with file-backed SQLite"
+        ),
+    }
+
+    assert _controlled_workspace_command_sequence(
+        task,
+        "main.py",
+    ) == []

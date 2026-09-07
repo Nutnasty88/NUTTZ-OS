@@ -649,7 +649,7 @@ CONTROLLED_PLAIN_COMMAND_PATTERN = re.compile(
                 (?!
                     (?:
                         and|then|to|should|must|will|after|before|
-                        when|while|so|which|that|with|followed
+                        when|while|so|which|that|with|using|followed
                     )\b
                 )
                 [A-Za-z0-9_.-]+
@@ -664,7 +664,7 @@ CONTROLLED_PLAIN_COMMAND_PATTERN = re.compile(
             $|
             \b(?:
                 and|then|to|should|must|will|after|before|
-                when|while|so|which|that|with|followed
+                when|while|so|which|that|with|using|followed
             )\b
         )
     )
