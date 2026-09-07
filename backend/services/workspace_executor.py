@@ -1021,7 +1021,7 @@ def execute_loopback_http_service_checks(
         ),
     }
 
-def launch_verified_project(
+def verify_project_manifest(
     mission_id: int,
 ) -> dict[str, Any]:
     """
@@ -1340,14 +1340,8 @@ def launch_verified_project(
             "Project manifest controlled arguments are invalid."
         ) from error
 
-    execution = execute_python_artifact(
-        mission_id,
-        entrypoint,
-        arguments=manifest_arguments,
-    )
-
     return {
-        "type": "builder_project_launch",
+        "type": "builder_project_manifest_verification",
         "verified_manifest": True,
         "mission_id": mission_id,
         "workspace": workspace_name,
@@ -1357,8 +1351,46 @@ def launch_verified_project(
         },
         "entrypoint": entrypoint,
         "artifact_sha256": artifact["sha256"],
+        "artifact_size_bytes": artifact["size_bytes"],
         "verified_files": verified_files,
         "verified_file_count": len(verified_files),
+        "arguments": manifest_arguments,
+    }
+
+
+def launch_verified_project(
+    mission_id: int,
+) -> dict[str, Any]:
+    """
+    Launch a project only after its NUTTZ-generated manifest passes
+    the reusable Workspace Executor verification gate.
+    """
+    verification = verify_project_manifest(
+        mission_id
+    )
+
+    execution = execute_python_artifact(
+        mission_id,
+        verification["entrypoint"],
+        arguments=verification["arguments"],
+    )
+
+    return {
+        "type": "builder_project_launch",
+        "verified_manifest": True,
+        "mission_id": mission_id,
+        "workspace": verification["workspace"],
+        "manifest": verification["manifest"],
+        "entrypoint": verification["entrypoint"],
+        "artifact_sha256": verification[
+            "artifact_sha256"
+        ],
+        "verified_files": verification[
+            "verified_files"
+        ],
+        "verified_file_count": verification[
+            "verified_file_count"
+        ],
         "execution": execution,
         "success": execution.get("verified") is True,
     }

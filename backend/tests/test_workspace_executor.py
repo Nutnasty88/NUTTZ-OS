@@ -798,3 +798,94 @@ def test_loopback_http_service_checks_reject_external_url_path(
                 }
             ],
         )
+
+
+def test_verify_project_manifest_does_not_execute_entrypoint(
+    isolated_builder_root,
+):
+    mission_id = 12012
+    workspace_name = create_project(
+        mission_id,
+        (
+            "from pathlib import Path\n"
+            'Path("executed.txt").write_text("RUN")\n'
+            'print("READY")\n'
+        ),
+        [],
+    )
+
+    verification = (
+        workspace_executor.verify_project_manifest(
+            mission_id
+        )
+    )
+
+    assert verification["verified_manifest"] is True
+    assert verification["entrypoint"] == "hello.py"
+    assert verification["arguments"] == []
+    assert verification["verified_file_count"] == 1
+
+    executed_path = (
+        isolated_builder_root
+        / workspace_name
+        / "executed.txt"
+    )
+
+    assert executed_path.exists() is False
+
+
+def test_verify_project_manifest_denies_tampered_entrypoint(
+    isolated_builder_root,
+):
+    mission_id = 12013
+    workspace_name = create_project(
+        mission_id,
+        'print("ORIGINAL")\n',
+        [],
+    )
+
+    workspace_manager.write_workspace_file(
+        workspace_name,
+        "hello.py",
+        'print("TAMPERED")\n',
+    )
+
+    with pytest.raises(
+        WorkspaceExecutionError,
+        match="SHA256",
+    ):
+        workspace_executor.verify_project_manifest(
+            mission_id
+        )
+
+
+def test_launch_verified_project_still_executes_after_refactor(
+    isolated_builder_root,
+):
+    mission_id = 12014
+
+    create_project(
+        mission_id,
+        (
+            "import sys\n"
+            'print(f"VALUE={sys.argv[1]}")\n'
+        ),
+        ["preserved"],
+    )
+
+    launch = launch_verified_project(
+        mission_id
+    )
+
+    assert launch["verified_manifest"] is True
+    assert launch["success"] is True
+    assert launch["entrypoint"] == "hello.py"
+    assert launch["execution"]["verified"] is True
+    assert (
+        launch["execution"]["stdout"]
+        == "VALUE=preserved\n"
+    )
+    assert (
+        launch["execution"]["argument_count"]
+        == 1
+    )
