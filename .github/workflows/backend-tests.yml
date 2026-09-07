@@ -39,4 +39,6 @@ jobs:
           python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
 
       - name: Run backend regression tests
-        run: python -m pytest -q
+        env:
+          PYTHONPATH: backend
+        run: python -m pytest -q backend/tests
