@@ -610,3 +610,191 @@ def test_python_artifact_sequence_promotes_artifact_metadata(
         == artifact["size_bytes"]
     )
     assert evidence["stdout"] == "READY\n"
+
+
+def test_loopback_http_service_checks_persist_sqlite_across_restart(
+    isolated_builder_root,
+):
+    import sqlite3
+
+    mission_id = 12010
+    workspace_name = f"mission-{mission_id}"
+
+    workspace_manager.create_workspace(
+        workspace_name
+    )
+
+    source = """
+from pathlib import Path
+import sqlite3
+
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+database_path = Path(__file__).with_name("tasks.db")
+
+
+def initialize_database():
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS tasks "
+            "(id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+initialize_database()
+
+
+class TaskInput(BaseModel):
+    title: str
+
+
+@app.post("/tasks")
+def create_task(task: TaskInput):
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            "INSERT INTO tasks (title) VALUES (?)",
+            (task.title,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    return {"title": task.title}
+
+
+@app.get("/tasks")
+def list_tasks():
+    connection = sqlite3.connect(database_path)
+    try:
+        rows = connection.execute(
+            "SELECT title FROM tasks ORDER BY id"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    return [
+        {"title": row[0]}
+        for row in rows
+    ]
+""".lstrip()
+
+    artifact = workspace_manager.write_workspace_file(
+        workspace_name,
+        "main.py",
+        source,
+    )
+
+    evidence = (
+        workspace_executor.execute_loopback_http_service_checks(
+            mission_id,
+            "main.py",
+            [
+                {
+                    "method": "POST",
+                    "path": "/tasks",
+                    "json_body": {
+                        "title": "Buy milk",
+                    },
+                    "expected_status": 200,
+                    "expected_json": {
+                        "title": "Buy milk",
+                    },
+                },
+                {
+                    "method": "GET",
+                    "path": "/tasks",
+                    "expected_status": 200,
+                    "expected_json": [
+                        {
+                            "title": "Buy milk",
+                        }
+                    ],
+                },
+                {
+                    "method": "GET",
+                    "path": "/tasks",
+                    "expected_status": 200,
+                    "expected_json": [
+                        {
+                            "title": "Buy milk",
+                        }
+                    ],
+                    "restart_before": True,
+                },
+            ],
+        )
+    )
+
+    assert evidence["verified"] is True
+    assert evidence["artifact"] == artifact["path"]
+    assert evidence["requested_check_count"] == 3
+    assert evidence["check_count"] == 3
+    assert evidence["restart_count"] == 1
+    assert evidence["host"] == "127.0.0.1"
+    assert evidence["ephemeral_port"] is True
+    assert evidence["service_stopped"] is True
+
+    assert all(
+        step["verified"] is True
+        for step in evidence["steps"]
+    )
+
+    database_path = (
+        isolated_builder_root
+        / workspace_name
+        / "tasks.db"
+    )
+
+    connection = sqlite3.connect(
+        f"file:{database_path}?mode=ro",
+        uri=True,
+    )
+
+    try:
+        rows = connection.execute(
+            "SELECT id, title FROM tasks ORDER BY id"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert rows == [(1, "Buy milk")]
+
+
+def test_loopback_http_service_checks_reject_external_url_path(
+    isolated_builder_root,
+):
+    mission_id = 12011
+    workspace_name = f"mission-{mission_id}"
+
+    workspace_manager.create_workspace(
+        workspace_name
+    )
+
+    workspace_manager.write_workspace_file(
+        workspace_name,
+        "main.py",
+        "app = None\n",
+    )
+
+    with pytest.raises(
+        WorkspaceExecutionError,
+        match="path is not allowed",
+    ):
+        workspace_executor.execute_loopback_http_service_checks(
+            mission_id,
+            "main.py",
+            [
+                {
+                    "method": "GET",
+                    "path": "http://example.com/",
+                    "expected_status": 200,
+                }
+            ],
+        )

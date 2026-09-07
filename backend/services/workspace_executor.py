@@ -564,6 +564,463 @@ def execute_python_artifact_sequence(
         ),
     }
 
+
+SERVICE_READY_TIMEOUT_SECONDS: Final = 5
+SERVICE_REQUEST_TIMEOUT_SECONDS: Final = 3
+SERVICE_STOP_TIMEOUT_SECONDS: Final = 3
+SERVICE_CHECK_LIMIT: Final = 8
+
+SAFE_HTTP_PATH_PATTERN: Final = re.compile(
+    r"^/[A-Za-z0-9_./-]{0,255}$"
+)
+
+HTTP_SERVICE_BOOTSTRAP: Final = (
+    "import sys, uvicorn; "
+    "workspace = sys.argv[1]; "
+    "module = sys.argv[2]; "
+    "port = int(sys.argv[3]); "
+    "sys.path.insert(0, workspace); "
+    "uvicorn.run("
+    "f'{module}:app', "
+    "host='127.0.0.1', "
+    "port=port, "
+    "log_level='warning', "
+    "access_log=False"
+    ")"
+)
+
+
+def _allocate_loopback_port() -> int:
+    import socket
+
+    with socket.socket(
+        socket.AF_INET,
+        socket.SOCK_STREAM,
+    ) as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = int(listener.getsockname()[1])
+
+    if port == 8000:
+        return _allocate_loopback_port()
+
+    return port
+
+
+def _wait_for_loopback_service(
+    process: subprocess.Popen,
+    port: int,
+) -> None:
+    import socket
+
+    deadline = (
+        time.monotonic()
+        + SERVICE_READY_TIMEOUT_SECONDS
+    )
+
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise WorkspaceExecutionError(
+                "HTTP service exited before becoming ready."
+            )
+
+        try:
+            with socket.create_connection(
+                ("127.0.0.1", port),
+                timeout=0.2,
+            ):
+                return
+        except OSError:
+            time.sleep(0.05)
+
+    raise WorkspaceExecutionError(
+        "HTTP service did not become ready before timeout."
+    )
+
+
+def _stop_http_service(
+    process: subprocess.Popen,
+) -> tuple[str, str]:
+    import signal
+
+    if process.poll() is None:
+        try:
+            os.killpg(
+                process.pid,
+                signal.SIGTERM,
+            )
+        except ProcessLookupError:
+            pass
+
+    try:
+        stdout, stderr = process.communicate(
+            timeout=SERVICE_STOP_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(
+                process.pid,
+                signal.SIGKILL,
+            )
+        except ProcessLookupError:
+            pass
+
+        stdout, stderr = process.communicate()
+
+    limited_stdout, _ = _limit_output(stdout)
+    limited_stderr, _ = _limit_output(stderr)
+
+    return limited_stdout, limited_stderr
+
+
+def _validate_http_service_checks(
+    checks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not isinstance(checks, list):
+        raise WorkspaceExecutionError(
+            "HTTP service checks must be a list."
+        )
+
+    if not 1 <= len(checks) <= SERVICE_CHECK_LIMIT:
+        raise WorkspaceExecutionError(
+            "HTTP service checks must contain between "
+            "1 and 8 checks."
+        )
+
+    validated = []
+
+    for check in checks:
+        if not isinstance(check, dict):
+            raise WorkspaceExecutionError(
+                "Each HTTP service check must be an object."
+            )
+
+        method = str(
+            check.get("method", "")
+        ).upper()
+
+        if method not in {"GET", "POST"}:
+            raise WorkspaceExecutionError(
+                "HTTP service checks support only GET and POST."
+            )
+
+        path = check.get("path")
+
+        if (
+            not isinstance(path, str)
+            or SAFE_HTTP_PATH_PATTERN.fullmatch(path) is None
+            or ".." in path
+        ):
+            raise WorkspaceExecutionError(
+                "HTTP service check path is not allowed."
+            )
+
+        expected_status = check.get(
+            "expected_status",
+            200,
+        )
+
+        if (
+            not isinstance(expected_status, int)
+            or not 100 <= expected_status <= 599
+        ):
+            raise WorkspaceExecutionError(
+                "HTTP service expected status is invalid."
+            )
+
+        restart_before = check.get(
+            "restart_before",
+            False,
+        )
+
+        if not isinstance(restart_before, bool):
+            raise WorkspaceExecutionError(
+                "HTTP service restart flag must be boolean."
+            )
+
+        json_body = check.get("json_body")
+
+        if (
+            json_body is not None
+            and not isinstance(
+                json_body,
+                (dict, list),
+            )
+        ):
+            raise WorkspaceExecutionError(
+                "HTTP service JSON body must be an object or list."
+            )
+
+        validated.append(
+            {
+                "method": method,
+                "path": path,
+                "json_body": json_body,
+                "expected_status": expected_status,
+                "has_expected_json": (
+                    "expected_json" in check
+                ),
+                "expected_json": check.get(
+                    "expected_json"
+                ),
+                "restart_before": restart_before,
+            }
+        )
+
+    return validated
+
+
+def execute_loopback_http_service_checks(
+    mission_id: int,
+    relative_path: str,
+    checks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Execute bounded HTTP checks against a Python web service.
+
+    This is a low-level Workspace Executor primitive. It is deliberately
+    not routed from mission tasks yet. The service is always bound to
+    loopback, uses an ephemeral port, accepts no shell command, and is
+    terminated deterministically.
+    """
+    import json
+    import sys
+
+    import requests
+
+    workspace_name, target, artifact = (
+        _resolve_python_artifact(
+            mission_id,
+            relative_path,
+        )
+    )
+
+    validated_checks = (
+        _validate_http_service_checks(checks)
+    )
+
+    module_name = target.stem
+
+    if (
+        not module_name.isidentifier()
+        or target.parent != (
+            WORKSPACE_ROOT / workspace_name
+        ).resolve()
+    ):
+        raise WorkspaceExecutionError(
+            "HTTP service entrypoint must be a top-level "
+            "Python module."
+        )
+
+    interpreter = sys.executable
+
+    if (
+        not isinstance(interpreter, str)
+        or not interpreter
+        or not Path(interpreter).exists()
+    ):
+        raise WorkspaceExecutionError(
+            "Trusted Python interpreter is unavailable."
+        )
+
+    environment = {
+        "PATH": SAFE_PATH,
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONUNBUFFERED": "1",
+    }
+
+    process = None
+    port = None
+    steps = []
+    restart_count = 0
+    service_stdout = ""
+    service_stderr = ""
+
+    def start_service():
+        nonlocal process, port
+
+        port = _allocate_loopback_port()
+
+        command = [
+            interpreter,
+            "-I",
+            "-B",
+            "-c",
+            HTTP_SERVICE_BOOTSTRAP,
+            str(target.parent),
+            module_name,
+            str(port),
+        ]
+
+        process = subprocess.Popen(
+            command,
+            shell=False,
+            cwd=str(target.parent),
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            close_fds=True,
+            start_new_session=True,
+        )
+
+        _wait_for_loopback_service(
+            process,
+            port,
+        )
+
+    try:
+        start_service()
+
+        for index, check in enumerate(
+            validated_checks,
+            start=1,
+        ):
+            if check["restart_before"]:
+                stdout, stderr = (
+                    _stop_http_service(process)
+                )
+
+                service_stdout += stdout
+                service_stderr += stderr
+                restart_count += 1
+
+                start_service()
+
+            url = (
+                f"http://127.0.0.1:{port}"
+                f"{check['path']}"
+            )
+
+            try:
+                response = requests.request(
+                    method=check["method"],
+                    url=url,
+                    json=check["json_body"],
+                    timeout=(
+                        SERVICE_REQUEST_TIMEOUT_SECONDS
+                    ),
+                )
+            except requests.RequestException as error:
+                steps.append(
+                    {
+                        "index": index,
+                        "method": check["method"],
+                        "path": check["path"],
+                        "verified": False,
+                        "error": str(error),
+                    }
+                )
+                break
+
+            response_text, truncated = _limit_output(
+                response.text
+            )
+
+            try:
+                response_json = response.json()
+                json_error = None
+            except ValueError as error:
+                response_json = None
+                json_error = str(error)
+
+            status_verified = (
+                response.status_code
+                == check["expected_status"]
+            )
+
+            if check["has_expected_json"]:
+                json_verified = (
+                    response_json
+                    == check["expected_json"]
+                )
+            else:
+                json_verified = True
+
+            verified = (
+                status_verified
+                and json_verified
+            )
+
+            steps.append(
+                {
+                    "index": index,
+                    "method": check["method"],
+                    "path": check["path"],
+                    "status_code": response.status_code,
+                    "expected_status": (
+                        check["expected_status"]
+                    ),
+                    "response_text": response_text,
+                    "response_json": response_json,
+                    "json_error": json_error,
+                    "expected_json": (
+                        check["expected_json"]
+                        if check["has_expected_json"]
+                        else None
+                    ),
+                    "restart_before": (
+                        check["restart_before"]
+                    ),
+                    "truncated": truncated,
+                    "verified": verified,
+                }
+            )
+
+            if not verified:
+                break
+
+    finally:
+        if process is not None:
+            stdout, stderr = (
+                _stop_http_service(process)
+            )
+            service_stdout += stdout
+            service_stderr += stderr
+
+    verified = (
+        len(steps) == len(validated_checks)
+        and all(
+            step.get("verified") is True
+            for step in steps
+        )
+    )
+
+    return {
+        "type": "builder_workspace_http_service",
+        "verified": verified,
+        "mission_id": mission_id,
+        "workspace": workspace_name,
+        "artifact": artifact["path"],
+        "artifact_sha256": artifact["sha256"],
+        "artifact_size_bytes": artifact[
+            "size_bytes"
+        ],
+        "interpreter": interpreter,
+        "host": "127.0.0.1",
+        "ephemeral_port": True,
+        "requested_check_count": len(
+            validated_checks
+        ),
+        "check_count": len(steps),
+        "restart_count": restart_count,
+        "steps": steps,
+        "service_stdout": _limit_output(
+            service_stdout
+        )[0],
+        "service_stderr": _limit_output(
+            service_stderr
+        )[0],
+        "service_stopped": (
+            process is None
+            or process.poll() is not None
+        ),
+    }
+
 def launch_verified_project(
     mission_id: int,
 ) -> dict[str, Any]:
