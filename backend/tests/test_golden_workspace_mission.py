@@ -156,6 +156,26 @@ def test_golden_9911_workspace_mission(
                 UNIQUE (mission_id, position)
             );
 
+            CREATE TABLE mission_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id INTEGER NOT NULL UNIQUE,
+                plan TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (mission_id)
+                    REFERENCES missions(id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE TABLE mission_research (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id INTEGER NOT NULL UNIQUE,
+                report_json TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (mission_id)
+                    REFERENCES missions(id)
+                    ON DELETE CASCADE
+            );
+
             CREATE TABLE mission_deliverables (
                 mission_id INTEGER PRIMARY KEY,
                 model TEXT NOT NULL,
@@ -393,66 +413,48 @@ def test_golden_9911_workspace_mission(
         fake_builder_chat,
     )
 
-    def fake_create_deliverable(
-        mission_id,
-        worker_owner_token=None,
+    def fake_reporter_chat(
+        *,
+        model,
+        messages,
+        stream,
+        think,
+        options,
+        timeout,
     ):
-        conn = get_connection()
+        assert model == reporter.REPORTER_MODEL
+        assert stream is False
+        assert think is False
+        assert options == {
+            "num_predict": 500,
+        }
+        assert timeout == 300
 
-        try:
-            lease = conn.execute(
-                """
-                SELECT owner_token
-                FROM mission_worker_leases
-                WHERE mission_id=?
-                """,
-                (mission_id,),
-            ).fetchone()
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
 
-            assert lease is not None
-            assert (
-                lease["owner_token"]
-                == worker_owner_token
-            )
+        user_prompt = messages[1]["content"]
 
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO mission_deliverables (
-                    mission_id,
-                    model,
-                    status,
-                    content,
-                    updated_at
-                )
-                VALUES (
-                    ?,
-                    'golden-9911',
-                    'Ready',
-                    ?,
-                    CURRENT_TIMESTAMP
-                )
-                """,
-                (
-                    mission_id,
-                    "Golden 9911 deliverable",
-                ),
-            )
-
-            conn.commit()
-        finally:
-            conn.close()
+        assert "MISSION EVIDENCE:" in user_prompt
+        assert "Buy milk" in user_prompt
+        assert "WORKSPACE EXECUTION: VERIFIED" in user_prompt
 
         return {
-            "mission_id": mission_id,
-            "model": "golden-9911",
-            "status": "Ready",
-            "content": "Golden 9911 deliverable",
+            "message": {
+                "content": (
+                    "# Golden 9911 Deliverable\n\n"
+                    "The SQLite task application was "
+                    "verified successfully.\n\n"
+                    "Mission outcome: Completed."
+                )
+            }
         }
 
     monkeypatch.setattr(
-        autonomous_worker,
-        "create_deliverable",
-        fake_create_deliverable,
+        reporter,
+        "chat_with_ollama",
+        fake_reporter_chat,
     )
 
     autonomous_worker._stop_event.clear()
@@ -618,11 +620,16 @@ def test_golden_9911_workspace_mission(
     assert "db_init.py" in manifest_paths
     assert "tasks.db" not in manifest_paths
 
-    assert deliverable["model"] == "golden-9911"
+    assert deliverable["model"] == reporter.REPORTER_MODEL
     assert deliverable["status"] == "Ready"
     assert (
         deliverable["content"]
-        == "Golden 9911 deliverable"
+        == (
+            "# Golden 9911 Deliverable\n\n"
+            "The SQLite task application was "
+            "verified successfully.\n\n"
+            "Mission outcome: Completed."
+        )
     )
 
     assert lease_row is None
