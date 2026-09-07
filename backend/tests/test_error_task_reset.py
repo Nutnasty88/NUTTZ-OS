@@ -1,4 +1,4 @@
-from app.database.database import get_connection
+from app.database.database import get_connection, init_db
 from services.autonomous_worker import ensure_worker_lease_table
 from services.executor import ensure_task_table, reset_error_task
 
@@ -32,6 +32,7 @@ def cleanup():
 
 
 def test_reset_error_task_allows_running_mission():
+    init_db()
     ensure_task_table()
     ensure_worker_lease_table()
     cleanup()
