@@ -1,6 +1,8 @@
 import sqlite3
 
 from services.executor import (
+    _is_http_service_execution_task,
+    _structured_http_service_checks,
     _controlled_workspace_arguments,
     _controlled_workspace_command_sequence,
     _execute_controlled_workspace_artifact,
@@ -1199,3 +1201,126 @@ def test_plain_command_sequence_ignores_using_prose_after_artifact():
         task,
         "main.py",
     ) == []
+
+
+def test_structured_http_service_checks_parse_post_get_and_restart():
+    task = {
+        "title": "Verify FastAPI task service",
+        "instructions": (
+            "Success-check:\n"
+            "HTTP POST /tasks\n"
+            'JSON body must equal {"title":"Buy milk"}\n'
+            "HTTP status must equal 200\n"
+            'JSON response must equal {"title":"Buy milk"}\n'
+            "Restart service\n"
+            "HTTP GET /tasks\n"
+            "HTTP status must equal 200\n"
+            'JSON response must equal [{"title":"Buy milk"}]'
+        ),
+    }
+
+    assert _structured_http_service_checks(task) == [
+        {
+            "method": "POST",
+            "path": "/tasks",
+            "restart_before": False,
+            "json": {
+                "title": "Buy milk",
+            },
+            "expected_status": 200,
+            "expected_json": {
+                "title": "Buy milk",
+            },
+        },
+        {
+            "method": "GET",
+            "path": "/tasks",
+            "restart_before": True,
+            "expected_status": 200,
+            "expected_json": [
+                {
+                    "title": "Buy milk",
+                }
+            ],
+        },
+    ]
+
+
+def test_structured_http_service_task_has_distinct_detector():
+    task = {
+        "title": "Verify HTTP API",
+        "instructions": (
+            "Success-check:\n"
+            "HTTP GET /tasks\n"
+            "HTTP status must equal 200\n"
+            "JSON response must equal []"
+        ),
+    }
+
+    assert _is_http_service_execution_task(task) is True
+
+
+def test_structured_http_service_checks_reject_invalid_json():
+    task = {
+        "title": "Verify HTTP API",
+        "instructions": (
+            "Success-check:\n"
+            "HTTP POST /tasks\n"
+            "JSON body must equal {not-json}\n"
+            "HTTP status must equal 200"
+        ),
+    }
+
+    assert _structured_http_service_checks(task) == []
+    assert _is_http_service_execution_task(task) is False
+
+
+def test_structured_http_service_checks_require_status():
+    task = {
+        "title": "Verify HTTP API",
+        "instructions": (
+            "Success-check:\n"
+            "HTTP GET /tasks\n"
+            "JSON response must equal []"
+        ),
+    }
+
+    assert _structured_http_service_checks(task) == []
+
+
+def test_structured_http_service_checks_reject_get_body():
+    task = {
+        "title": "Verify HTTP API",
+        "instructions": (
+            "Success-check:\n"
+            "HTTP GET /tasks\n"
+            'JSON body must equal {"bad":true}\n'
+            "HTTP status must equal 200"
+        ),
+    }
+
+    assert _structured_http_service_checks(task) == []
+
+
+def test_structured_http_parser_ignores_shell_commands():
+    task = {
+        "title": "Verify HTTP API",
+        "instructions": (
+            "Success-check:\n"
+            "curl http://127.0.0.1:8000/tasks | grep milk\n"
+            "killall python\n"
+            "HTTP GET /tasks\n"
+            "HTTP status must equal 200\n"
+            "JSON response must equal []"
+        ),
+    }
+
+    assert _structured_http_service_checks(task) == [
+        {
+            "method": "GET",
+            "path": "/tasks",
+            "restart_before": False,
+            "expected_status": 200,
+            "expected_json": [],
+        }
+    ]

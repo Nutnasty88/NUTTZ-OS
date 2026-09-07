@@ -1060,6 +1060,172 @@ def _evaluate_execution_acceptance(
     }
 
 
+
+HTTP_METHOD_LINE_PATTERN = re.compile(
+    r"^\s*HTTP\s+(?P<method>GET|POST)\s+"
+    r"(?P<path>/[^\s]*)\s*$",
+    flags=re.IGNORECASE,
+)
+
+HTTP_STATUS_LINE_PATTERN = re.compile(
+    r"^\s*HTTP\s+status\s+must\s+equal\s+"
+    r"(?P<status>\d{3})\s*$",
+    flags=re.IGNORECASE,
+)
+
+HTTP_JSON_BODY_LINE_PATTERN = re.compile(
+    r"^\s*JSON\s+body\s+must\s+equal\s+"
+    r"(?P<json>.+?)\s*$",
+    flags=re.IGNORECASE,
+)
+
+HTTP_JSON_RESPONSE_LINE_PATTERN = re.compile(
+    r"^\s*JSON\s+response\s+must\s+equal\s+"
+    r"(?P<json>.+?)\s*$",
+    flags=re.IGNORECASE,
+)
+
+HTTP_RESTART_LINE_PATTERN = re.compile(
+    r"^\s*Restart\s+service\s*$",
+    flags=re.IGNORECASE,
+)
+
+
+def _structured_http_service_checks(
+    task: Any,
+) -> list[dict[str, Any]]:
+    """
+    Parse the bounded structured HTTP verification grammar emitted by
+    Planner.
+
+    This parser returns request/check data only. It never executes shell
+    commands, opens sockets, or starts a service.
+    """
+    title_text = str(task["title"])
+    instructions_text = str(task["instructions"])
+
+    if title_text == instructions_text:
+        task_text = title_text
+    else:
+        task_text = (
+            f"{title_text}\n"
+            f"{instructions_text}"
+        )
+
+    success_match = re.search(
+        r"^\s*Success-check:\s*(?:\r?\n|$)",
+        task_text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    if success_match is not None:
+        task_text = task_text[success_match.end():]
+
+    checks: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    restart_pending = False
+
+    for raw_line in task_text.splitlines():
+        line = raw_line.strip()
+
+        if not line:
+            continue
+
+        if HTTP_RESTART_LINE_PATTERN.fullmatch(line):
+            if current is not None:
+                checks.append(current)
+                current = None
+
+            restart_pending = True
+            continue
+
+        method_match = HTTP_METHOD_LINE_PATTERN.fullmatch(line)
+
+        if method_match:
+            if current is not None:
+                checks.append(current)
+
+            current = {
+                "method": method_match.group("method").upper(),
+                "path": method_match.group("path"),
+                "restart_before": restart_pending,
+            }
+            restart_pending = False
+            continue
+
+        if current is None:
+            continue
+
+        status_match = HTTP_STATUS_LINE_PATTERN.fullmatch(line)
+
+        if status_match:
+            current["expected_status"] = int(
+                status_match.group("status")
+            )
+            continue
+
+        body_match = HTTP_JSON_BODY_LINE_PATTERN.fullmatch(line)
+
+        if body_match:
+            try:
+                body = json.loads(body_match.group("json"))
+            except json.JSONDecodeError:
+                return []
+
+            if not isinstance(body, (dict, list)):
+                return []
+
+            current["json"] = body
+            continue
+
+        response_match = (
+            HTTP_JSON_RESPONSE_LINE_PATTERN.fullmatch(line)
+        )
+
+        if response_match:
+            try:
+                expected_json = json.loads(
+                    response_match.group("json")
+                )
+            except json.JSONDecodeError:
+                return []
+
+            if not isinstance(expected_json, (dict, list)):
+                return []
+
+            current["expected_json"] = expected_json
+            continue
+
+    if current is not None:
+        checks.append(current)
+
+    if restart_pending:
+        return []
+
+    if not checks:
+        return []
+
+    if len(checks) > 8:
+        return []
+
+    for check in checks:
+        if "expected_status" not in check:
+            return []
+
+        if (
+            check["method"] == "GET"
+            and "json" in check
+        ):
+            return []
+
+    return checks
+
+
+def _is_http_service_execution_task(task: Any) -> bool:
+    """Detect a complete structured HTTP service verification task."""
+    return bool(_structured_http_service_checks(task))
+
+
 def _is_workspace_execution_task(task: Any) -> bool:
     """Detect explicit requests to execute a Python Builder artifact."""
     task_text = (
