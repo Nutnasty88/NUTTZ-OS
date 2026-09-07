@@ -126,6 +126,22 @@ Rules:
 - Express exact stdout deterministically using wording such as:
   stdout must equal "Buy milk"
   so the Executor can verify the expected output against execution evidence.
+- For HTTP service missions, do not express API verification as shell commands
+  such as curl, grep, pipes, background processes, kill commands, or other
+  process-control syntax.
+- For HTTP service success-checks, describe each request as structured HTTP
+  evidence using the method and path, for example:
+  HTTP POST /tasks
+  JSON body must equal {"title":"Buy milk"}
+  HTTP status must equal 200
+- Describe expected HTTP response bodies as JSON response requirements, not
+  stdout requirements.
+- When an HTTP mission requires persistence across a service restart, explicitly
+  require a service restart followed by the HTTP request that verifies the
+  persisted state.
+- For persistent SQLite HTTP applications, use Python's standard-library
+  sqlite3 module unless the mission explicitly requires a third-party ORM or
+  database library. Do not introduce SQLAlchemy merely to implement SQLite.
 - Keep the plan focused and practical.
 """.strip()
 
