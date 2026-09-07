@@ -773,6 +773,9 @@ def execute_loopback_http_service_checks(
     mission_id: int,
     relative_path: str,
     checks: list[dict[str, Any]],
+    *,
+    expected_sha256: str | None = None,
+    expected_size_bytes: int | None = None,
 ) -> dict[str, Any]:
     """
     Execute bounded HTTP checks against a Python web service.
@@ -797,6 +800,36 @@ def execute_loopback_http_service_checks(
     validated_checks = (
         _validate_http_service_checks(checks)
     )
+
+    if expected_sha256 is not None:
+        if (
+            not isinstance(expected_sha256, str)
+            or len(expected_sha256) != 64
+        ):
+            raise WorkspaceExecutionError(
+                "HTTP service expected SHA256 is invalid."
+            )
+
+        if artifact["sha256"] != expected_sha256:
+            raise WorkspaceExecutionError(
+                "HTTP service launch denied: entrypoint SHA256 "
+                "does not match verified Builder evidence."
+            )
+
+    if expected_size_bytes is not None:
+        if (
+            not isinstance(expected_size_bytes, int)
+            or expected_size_bytes < 0
+        ):
+            raise WorkspaceExecutionError(
+                "HTTP service expected size is invalid."
+            )
+
+        if artifact["size_bytes"] != expected_size_bytes:
+            raise WorkspaceExecutionError(
+                "HTTP service launch denied: entrypoint size "
+                "does not match verified Builder evidence."
+            )
 
     module_name = target.stem
 

@@ -889,3 +889,105 @@ def test_launch_verified_project_still_executes_after_refactor(
         launch["execution"]["argument_count"]
         == 1
     )
+
+
+def test_loopback_http_service_checks_accept_verified_builder_artifact(
+    isolated_builder_root,
+):
+    mission_id = 12015
+    workspace_name = f"mission-{mission_id}"
+
+    workspace_manager.create_workspace(
+        workspace_name
+    )
+
+    artifact = workspace_manager.write_workspace_file(
+        workspace_name,
+        "main.py",
+        (
+            "from fastapi import FastAPI\n"
+            "\n"
+            "app = FastAPI()\n"
+            "\n"
+            '@app.get("/health")\n'
+            "def health():\n"
+            '    return {"status": "ok"}\n'
+        ),
+    )
+
+    evidence = (
+        workspace_executor.execute_loopback_http_service_checks(
+            mission_id,
+            "main.py",
+            [
+                {
+                    "method": "GET",
+                    "path": "/health",
+                    "expected_status": 200,
+                    "expected_json": {
+                        "status": "ok"
+                    },
+                }
+            ],
+            expected_sha256=artifact["sha256"],
+            expected_size_bytes=artifact["size_bytes"],
+        )
+    )
+
+    assert evidence["verified"] is True
+    assert evidence["check_count"] == 1
+    assert evidence["service_stopped"] is True
+
+
+def test_loopback_http_service_checks_reject_tampered_builder_artifact(
+    isolated_builder_root,
+):
+    mission_id = 12016
+    workspace_name = f"mission-{mission_id}"
+
+    workspace_manager.create_workspace(
+        workspace_name
+    )
+
+    original = workspace_manager.write_workspace_file(
+        workspace_name,
+        "main.py",
+        (
+            "from fastapi import FastAPI\n"
+            "\n"
+            "app = FastAPI()\n"
+        ),
+    )
+
+    workspace_manager.write_workspace_file(
+        workspace_name,
+        "main.py",
+        (
+            "from fastapi import FastAPI\n"
+            "\n"
+            "app = FastAPI()\n"
+            "\n"
+            'TAMPERED = True\n'
+        ),
+    )
+
+    with pytest.raises(
+        WorkspaceExecutionError,
+        match="SHA256",
+    ):
+        (
+            workspace_executor
+            .execute_loopback_http_service_checks(
+                mission_id,
+                "main.py",
+                [
+                    {
+                        "method": "GET",
+                        "path": "/",
+                        "expected_status": 200,
+                    }
+                ],
+                expected_sha256=original["sha256"],
+                expected_size_bytes=original["size_bytes"],
+            )
+        )
