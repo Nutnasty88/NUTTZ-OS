@@ -991,3 +991,302 @@ def test_loopback_http_service_checks_reject_tampered_builder_artifact(
                 expected_size_bytes=original["size_bytes"],
             )
         )
+
+
+def test_manifest_v3_defaults_existing_projects_to_python_cli(
+    isolated_builder_root,
+):
+    mission_id = 12017
+
+    create_project(
+        mission_id,
+        'print("READY")\n',
+        [],
+    )
+
+    workspace_name = f"mission-{mission_id}"
+
+    manifest_file = workspace_manager.read_workspace_file(
+        workspace_name,
+        workspace_manager.PROJECT_MANIFEST_PATH,
+    )
+
+    import json
+
+    manifest = json.loads(
+        manifest_file["content"]
+    )
+
+    assert manifest["schema_version"] == 3
+    assert manifest["runtime"] == "python"
+    assert manifest["launch_type"] == "python-cli"
+    assert manifest["entrypoint"] == "hello.py"
+
+
+def test_manifest_v3_records_python_asgi_launch_type(
+    isolated_builder_root,
+):
+    mission_id = 12018
+    workspace_name = f"mission-{mission_id}"
+
+    workspace_manager.create_workspace(
+        workspace_name
+    )
+
+    artifact = workspace_manager.write_workspace_file(
+        workspace_name,
+        "main.py",
+        (
+            "from fastapi import FastAPI\n"
+            "app = FastAPI()\n"
+        ),
+    )
+
+    result = workspace_manager.write_project_manifest(
+        workspace_name=workspace_name,
+        mission_id=mission_id,
+        entrypoint="main.py",
+        runtime="python",
+        run_command=[
+            "python-asgi",
+            "main.py",
+        ],
+        artifact_sha256=artifact["sha256"],
+        artifact_size_bytes=artifact["size_bytes"],
+        verified=True,
+        launch_type="python-asgi",
+    )
+
+    manifest = result["manifest"]
+
+    assert manifest["schema_version"] == 3
+    assert manifest["runtime"] == "python"
+    assert manifest["launch_type"] == "python-asgi"
+    assert manifest["entrypoint"] == "main.py"
+
+
+def test_manifest_writer_rejects_unknown_launch_type(
+    isolated_builder_root,
+):
+    mission_id = 12019
+    workspace_name = f"mission-{mission_id}"
+
+    workspace_manager.create_workspace(
+        workspace_name
+    )
+
+    artifact = workspace_manager.write_workspace_file(
+        workspace_name,
+        "main.py",
+        'print("READY")\n',
+    )
+
+    with pytest.raises(
+        workspace_manager.WorkspaceConflictError,
+        match="approved launch type",
+    ):
+        workspace_manager.write_project_manifest(
+            workspace_name=workspace_name,
+            mission_id=mission_id,
+            entrypoint="main.py",
+            runtime="python",
+            run_command=[
+                "python3",
+                "-I",
+                "-B",
+                "main.py",
+            ],
+            artifact_sha256=artifact["sha256"],
+            artifact_size_bytes=artifact["size_bytes"],
+            verified=True,
+            launch_type="shell",
+        )
+
+
+def test_verify_python_asgi_manifest_without_launching_service(
+    isolated_builder_root,
+):
+    mission_id = 12020
+    workspace_name = f"mission-{mission_id}"
+
+    workspace_manager.create_workspace(
+        workspace_name
+    )
+
+    artifact = workspace_manager.write_workspace_file(
+        workspace_name,
+        "main.py",
+        (
+            "from fastapi import FastAPI\n"
+            "app = FastAPI()\n"
+        ),
+    )
+
+    workspace_manager.write_project_manifest(
+        workspace_name=workspace_name,
+        mission_id=mission_id,
+        entrypoint="main.py",
+        runtime="python",
+        run_command=[
+            "python-asgi",
+            "main.py",
+        ],
+        artifact_sha256=artifact["sha256"],
+        artifact_size_bytes=artifact["size_bytes"],
+        verified=True,
+        launch_type="python-asgi",
+    )
+
+    verification = (
+        workspace_executor.verify_project_manifest(
+            mission_id
+        )
+    )
+
+    assert verification["verified_manifest"] is True
+    assert verification["launch_type"] == "python-asgi"
+    assert verification["entrypoint"] == "main.py"
+    assert verification["arguments"] == []
+
+
+def test_launch_verified_project_refuses_asgi_manifest(
+    isolated_builder_root,
+):
+    mission_id = 12021
+    workspace_name = f"mission-{mission_id}"
+
+    workspace_manager.create_workspace(
+        workspace_name
+    )
+
+    artifact = workspace_manager.write_workspace_file(
+        workspace_name,
+        "main.py",
+        (
+            "from fastapi import FastAPI\n"
+            "app = FastAPI()\n"
+        ),
+    )
+
+    workspace_manager.write_project_manifest(
+        workspace_name=workspace_name,
+        mission_id=mission_id,
+        entrypoint="main.py",
+        runtime="python",
+        run_command=[
+            "python-asgi",
+            "main.py",
+        ],
+        artifact_sha256=artifact["sha256"],
+        artifact_size_bytes=artifact["size_bytes"],
+        verified=True,
+        launch_type="python-asgi",
+    )
+
+    with pytest.raises(
+        WorkspaceExecutionError,
+        match="ASGI",
+    ):
+        launch_verified_project(mission_id)
+
+
+def test_legacy_schema_v2_cli_manifest_remains_launchable(
+    isolated_builder_root,
+):
+    import json
+
+    mission_id = 12022
+
+    create_project(
+        mission_id,
+        'print("LEGACY READY")\n',
+        [],
+    )
+
+    workspace_name = f"mission-{mission_id}"
+    manifest_path = (
+        isolated_builder_root
+        / workspace_name
+        / workspace_manager.PROJECT_MANIFEST_PATH
+    )
+
+    manifest = json.loads(
+        manifest_path.read_text()
+    )
+
+    # Simulate a manifest written by the previous schema-v2
+    # implementation.
+    manifest["schema_version"] = 2
+    manifest.pop("launch_type", None)
+
+    manifest_path.write_text(
+        json.dumps(
+            manifest,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+    verification = (
+        workspace_executor.verify_project_manifest(
+            mission_id
+        )
+    )
+
+    assert verification["verified_manifest"] is True
+    assert verification["launch_type"] == "python-cli"
+
+    launch = launch_verified_project(
+        mission_id
+    )
+
+    assert launch["success"] is True
+    assert (
+        launch["execution"]["stdout"]
+        == "LEGACY READY\n"
+    )
+
+
+def test_schema_v3_manifest_requires_launch_type(
+    isolated_builder_root,
+):
+    import json
+
+    mission_id = 12023
+
+    create_project(
+        mission_id,
+        'print("READY")\n',
+        [],
+    )
+
+    workspace_name = f"mission-{mission_id}"
+    manifest_path = (
+        isolated_builder_root
+        / workspace_name
+        / workspace_manager.PROJECT_MANIFEST_PATH
+    )
+
+    manifest = json.loads(
+        manifest_path.read_text()
+    )
+
+    manifest.pop("launch_type")
+
+    manifest_path.write_text(
+        json.dumps(
+            manifest,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+    with pytest.raises(
+        WorkspaceExecutionError,
+        match="launch type is invalid",
+    ):
+        workspace_executor.verify_project_manifest(
+            mission_id
+        )

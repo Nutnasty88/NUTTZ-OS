@@ -1099,7 +1099,25 @@ def verify_project_manifest(
             "Project manifest must contain an object."
         )
 
-    if manifest.get("schema_version") != 2:
+    schema_version = manifest.get("schema_version")
+
+    if schema_version == 2:
+        # Legacy verified manifests were CLI-only and did not
+        # carry an explicit launch_type field.
+        launch_type = "python-cli"
+
+    elif schema_version == 3:
+        launch_type = manifest.get("launch_type")
+
+        if launch_type not in {
+            "python-cli",
+            "python-asgi",
+        }:
+            raise WorkspaceExecutionError(
+                "Project manifest launch type is invalid."
+            )
+
+    else:
         raise WorkspaceExecutionError(
             "Unsupported project manifest schema."
         )
@@ -1348,30 +1366,42 @@ def verify_project_manifest(
 
     run_command = manifest.get("run_command")
 
-    approved_run_prefix = [
-        "python3",
-        "-I",
-        "-B",
-        entrypoint,
-    ]
+    if launch_type == "python-cli":
+        approved_run_prefix = [
+            "python3",
+            "-I",
+            "-B",
+            entrypoint,
+        ]
 
-    if (
-        not isinstance(run_command, list)
-        or run_command[:4] != approved_run_prefix
-    ):
-        raise WorkspaceExecutionError(
-            "Project manifest run command is not an approved "
-            "Workspace Executor command."
-        )
+        if (
+            not isinstance(run_command, list)
+            or run_command[:4] != approved_run_prefix
+        ):
+            raise WorkspaceExecutionError(
+                "Project manifest run command is not an approved "
+                "Workspace Executor command."
+            )
 
-    try:
-        manifest_arguments = _validate_controlled_arguments(
-            run_command[4:]
-        )
-    except WorkspaceExecutionError as error:
-        raise WorkspaceExecutionError(
-            "Project manifest controlled arguments are invalid."
-        ) from error
+        try:
+            manifest_arguments = _validate_controlled_arguments(
+                run_command[4:]
+            )
+        except WorkspaceExecutionError as error:
+            raise WorkspaceExecutionError(
+                "Project manifest controlled arguments are invalid."
+            ) from error
+
+    else:
+        if run_command != [
+            "python-asgi",
+            entrypoint,
+        ]:
+            raise WorkspaceExecutionError(
+                "Project manifest ASGI launch command is invalid."
+            )
+
+        manifest_arguments = []
 
     return {
         "type": "builder_project_manifest_verification",
@@ -1383,6 +1413,7 @@ def verify_project_manifest(
             "sha256": manifest_file["sha256"],
         },
         "entrypoint": entrypoint,
+        "launch_type": launch_type,
         "artifact_sha256": artifact["sha256"],
         "artifact_size_bytes": artifact["size_bytes"],
         "verified_files": verified_files,
@@ -1401,6 +1432,12 @@ def launch_verified_project(
     verification = verify_project_manifest(
         mission_id
     )
+
+    if verification["launch_type"] != "python-cli":
+        raise WorkspaceExecutionError(
+            "Verified ASGI projects require the managed "
+            "HTTP service launcher."
+        )
 
     execution = execute_python_artifact(
         mission_id,

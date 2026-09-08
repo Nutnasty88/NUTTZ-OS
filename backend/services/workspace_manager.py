@@ -507,6 +507,7 @@ def write_project_manifest(
     artifact_sha256: str,
     artifact_size_bytes: int,
     verified: bool,
+    launch_type: str = "python-cli",
 ) -> dict[str, Any]:
     """
     Write the NUTTZ project manifest from trusted verified runtime data.
@@ -531,6 +532,14 @@ def write_project_manifest(
     if not isinstance(runtime, str) or not runtime.strip():
         raise WorkspaceConflictError(
             "Project manifest requires a runtime."
+        )
+
+    if launch_type not in {
+        "python-cli",
+        "python-asgi",
+    }:
+        raise WorkspaceConflictError(
+            "Project manifest requires an approved launch type."
         )
 
     if (
@@ -636,10 +645,11 @@ def write_project_manifest(
         )
 
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "name": normalized,
         "mission_id": mission_id,
         "runtime": runtime,
+        "launch_type": launch_type,
         "entrypoint": artifact["path"],
         "artifact": {
             "path": artifact["path"],
