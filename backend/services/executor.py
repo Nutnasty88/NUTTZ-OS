@@ -13,6 +13,7 @@ from services.builder import build_task, repair_artifact
 from services.ollama_service import chat_with_ollama
 from services.tool_runner import run_tool
 from services.workspace_executor import (
+    execute_loopback_http_service_checks,
     execute_python_artifact,
     execute_python_artifact_sequence,
 )
@@ -1279,6 +1280,168 @@ def _is_workspace_execution_task(task: Any) -> bool:
 
     return bool(
         WORKSPACE_EXECUTION_PATTERN.search(task_text)
+    )
+
+
+
+def _latest_verified_builder_entrypoint_evidence(
+    mission_id: int,
+) -> dict[str, Any] | None:
+    """
+    Return the newest persisted verified Builder entrypoint evidence.
+
+    This is source-verification evidence only. It does not imply that
+    the project has already passed runtime or HTTP verification.
+    """
+    conn = get_connection()
+
+    try:
+        rows = conn.execute(
+            """
+            SELECT result
+            FROM mission_tasks
+            WHERE
+                mission_id=?
+                AND status='Completed'
+                AND result LIKE 'BUILDER AGENT: COMPLETED%'
+            ORDER BY position DESC, id DESC
+            """,
+            (mission_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    marker = "VERIFIED BUILDER EVIDENCE:\n"
+
+    for row in rows:
+        result = row["result"]
+
+        if (
+            not isinstance(result, str)
+            or marker not in result
+        ):
+            continue
+
+        evidence_text = result.split(
+            marker,
+            1,
+        )[1].lstrip()
+
+        try:
+            evidence, _ = json.JSONDecoder().raw_decode(
+                evidence_text
+            )
+        except json.JSONDecodeError:
+            continue
+
+        if (
+            not isinstance(evidence, dict)
+            or evidence.get("verified") is not True
+        ):
+            continue
+
+        entrypoint = evidence.get("entrypoint")
+        sha256 = evidence.get("entrypoint_sha256")
+        size_bytes = evidence.get("entrypoint_size_bytes")
+
+        if (
+            not isinstance(entrypoint, str)
+            or not entrypoint.strip()
+            or not entrypoint.lower().endswith(".py")
+        ):
+            continue
+
+        if (
+            not isinstance(sha256, str)
+            or len(sha256) != 64
+            or re.fullmatch(
+                r"[0-9a-fA-F]{64}",
+                sha256,
+            ) is None
+        ):
+            continue
+
+        if (
+            not isinstance(size_bytes, int)
+            or isinstance(size_bytes, bool)
+            or size_bytes < 0
+        ):
+            continue
+
+        return {
+            "entrypoint": entrypoint.strip(),
+            "entrypoint_sha256": sha256.lower(),
+            "entrypoint_size_bytes": size_bytes,
+        }
+
+    return None
+
+
+def _execute_structured_http_service_task(
+    mission_id: int,
+    task: Any,
+    artifact_path: str,
+) -> dict[str, Any]:
+    """
+    Execute structured HTTP verification against the exact entrypoint
+    attested by persisted verified Builder evidence.
+    """
+    checks = _structured_http_service_checks(task)
+
+    if not checks:
+        raise RuntimeError(
+            "HTTP service execution requested without a valid "
+            "structured HTTP verification contract."
+        )
+
+    builder_evidence = (
+        _latest_verified_builder_entrypoint_evidence(
+            mission_id
+        )
+    )
+
+    if builder_evidence is None:
+        raise RuntimeError(
+            "HTTP service execution requires persisted verified "
+            "Builder entrypoint evidence."
+        )
+
+    if builder_evidence["entrypoint"] != artifact_path:
+        raise RuntimeError(
+            "HTTP service execution denied because the selected "
+            "entrypoint does not match verified Builder evidence."
+        )
+
+    executor_checks = []
+
+    for check in checks:
+        executor_check = {
+            "method": check["method"],
+            "path": check["path"],
+            "expected_status": check["expected_status"],
+            "restart_before": check["restart_before"],
+        }
+
+        if "json" in check:
+            executor_check["json_body"] = check["json"]
+
+        if "expected_json" in check:
+            executor_check["expected_json"] = (
+                check["expected_json"]
+            )
+
+        executor_checks.append(executor_check)
+
+    return execute_loopback_http_service_checks(
+        mission_id,
+        artifact_path,
+        executor_checks,
+        expected_sha256=builder_evidence[
+            "entrypoint_sha256"
+        ],
+        expected_size_bytes=builder_evidence[
+            "entrypoint_size_bytes"
+        ],
     )
 
 

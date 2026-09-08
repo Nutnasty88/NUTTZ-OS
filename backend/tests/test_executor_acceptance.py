@@ -1,6 +1,7 @@
 import sqlite3
 
 from services.executor import (
+    _execute_structured_http_service_task,
     _is_http_service_execution_task,
     _structured_http_service_checks,
     _controlled_workspace_arguments,
@@ -1324,3 +1325,163 @@ def test_structured_http_parser_ignores_shell_commands():
             "expected_json": [],
         }
     ]
+
+
+def test_http_executor_adapter_passes_verified_builder_identity(
+    monkeypatch,
+):
+    task = {
+        "title": "Verify HTTP API",
+        "instructions": (
+            "Success-check:\n"
+            "HTTP POST /tasks\n"
+            'JSON body must equal {"title":"Buy milk"}\n'
+            "HTTP status must equal 200\n"
+            'JSON response must equal {"title":"Buy milk"}\n'
+            "Restart service\n"
+            "HTTP GET /tasks\n"
+            "HTTP status must equal 200\n"
+            'JSON response must equal [{"title":"Buy milk"}]'
+        ),
+    }
+
+    monkeypatch.setattr(
+        "services.executor."
+        "_latest_verified_builder_entrypoint_evidence",
+        lambda mission_id: {
+            "entrypoint": "main.py",
+            "entrypoint_sha256": "a" * 64,
+            "entrypoint_size_bytes": 321,
+        },
+    )
+
+    calls = []
+
+    def fake_http_executor(
+        mission_id,
+        relative_path,
+        checks,
+        *,
+        expected_sha256=None,
+        expected_size_bytes=None,
+    ):
+        calls.append(
+            {
+                "mission_id": mission_id,
+                "relative_path": relative_path,
+                "checks": checks,
+                "expected_sha256": expected_sha256,
+                "expected_size_bytes": expected_size_bytes,
+            }
+        )
+
+        return {
+            "verified": True,
+            "workspace": f"mission-{mission_id}",
+            "artifact": relative_path,
+            "artifact_sha256": expected_sha256,
+            "artifact_size_bytes": expected_size_bytes,
+        }
+
+    monkeypatch.setattr(
+        "services.executor."
+        "execute_loopback_http_service_checks",
+        fake_http_executor,
+    )
+
+    evidence = _execute_structured_http_service_task(
+        1234,
+        task,
+        "main.py",
+    )
+
+    assert evidence["verified"] is True
+
+    assert calls == [
+        {
+            "mission_id": 1234,
+            "relative_path": "main.py",
+            "checks": [
+                {
+                    "method": "POST",
+                    "path": "/tasks",
+                    "expected_status": 200,
+                    "restart_before": False,
+                    "json_body": {
+                        "title": "Buy milk",
+                    },
+                    "expected_json": {
+                        "title": "Buy milk",
+                    },
+                },
+                {
+                    "method": "GET",
+                    "path": "/tasks",
+                    "expected_status": 200,
+                    "restart_before": True,
+                    "expected_json": [
+                        {
+                            "title": "Buy milk",
+                        }
+                    ],
+                },
+            ],
+            "expected_sha256": "a" * 64,
+            "expected_size_bytes": 321,
+        }
+    ]
+
+
+def test_http_executor_adapter_rejects_entrypoint_mismatch(
+    monkeypatch,
+):
+    task = {
+        "title": "Verify HTTP API",
+        "instructions": (
+            "Success-check:\n"
+            "HTTP GET /tasks\n"
+            "HTTP status must equal 200"
+        ),
+    }
+
+    monkeypatch.setattr(
+        "services.executor."
+        "_latest_verified_builder_entrypoint_evidence",
+        lambda mission_id: {
+            "entrypoint": "app.py",
+            "entrypoint_sha256": "b" * 64,
+            "entrypoint_size_bytes": 100,
+        },
+    )
+
+    called = False
+
+    def fake_http_executor(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError(
+            "HTTP executor must not launch on identity mismatch"
+        )
+
+    monkeypatch.setattr(
+        "services.executor."
+        "execute_loopback_http_service_checks",
+        fake_http_executor,
+    )
+
+    try:
+        _execute_structured_http_service_task(
+            1234,
+            task,
+            "main.py",
+        )
+    except RuntimeError as error:
+        assert "does not match verified Builder evidence" in str(
+            error
+        )
+    else:
+        raise AssertionError(
+            "Expected Builder entrypoint mismatch rejection"
+        )
+
+    assert called is False
