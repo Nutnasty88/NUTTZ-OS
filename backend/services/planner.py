@@ -255,28 +255,84 @@ Priority: {mission["priority"]}
 Current status: {mission["status"]}
 """.strip()
 
+    messages = [
+        {
+            "role": "system",
+            "content": system_prompt,
+        },
+        {
+            "role": "user",
+            "content": user_prompt,
+        },
+    ]
+
     response = chat_with_ollama(
         model=PLANNER_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
-                "role": "user",
-                "content": user_prompt,
-            },
-        ],
+        messages=messages,
         stream=False,
         timeout=300,
     )
 
     plan = extract_plan(response)
 
-    _validate_http_service_plan(
-        mission_title=mission["title"],
-        plan=plan,
-    )
+    try:
+        _validate_http_service_plan(
+            mission_title=mission["title"],
+            plan=plan,
+        )
+    except RuntimeError as error:
+        if not _is_http_service_mission(
+            mission["title"]
+        ):
+            raise
+
+        correction_prompt = f"""
+Your previous plan violated the NUTTZ-OS HTTP Planner contract.
+
+Violation:
+{error}
+
+Return a corrected complete execution plan.
+
+For HTTP verification:
+- Do not use curl, grep, pipes, uvicorn commands, background
+  processes, kill commands, or shell process control.
+- Use structured HTTP request evidence.
+- Write HTTP GET or HTTP POST followed by the relative path.
+- Write HTTP status must equal N for every verified request.
+- Use JSON body must equal for request bodies.
+- Use JSON response must equal for expected response bodies.
+- Write Restart service as its own line when persistence across
+  restart must be verified.
+
+Return only the corrected complete plan.
+""".strip()
+
+        repair_messages = [
+            *messages,
+            {
+                "role": "assistant",
+                "content": plan,
+            },
+            {
+                "role": "user",
+                "content": correction_prompt,
+            },
+        ]
+
+        repair_response = chat_with_ollama(
+            model=PLANNER_MODEL,
+            messages=repair_messages,
+            stream=False,
+            timeout=300,
+        )
+
+        plan = extract_plan(repair_response)
+
+        _validate_http_service_plan(
+            mission_title=mission["title"],
+            plan=plan,
+        )
 
     conn = get_connection()
 

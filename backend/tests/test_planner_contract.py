@@ -595,3 +595,153 @@ def test_cli_planner_is_not_subject_to_http_contract():
             "python main.py"
         ),
     )
+
+
+def test_http_planner_repairs_invalid_first_response(
+    monkeypatch,
+    tmp_path,
+):
+    db_path = tmp_path / "planner-http-repair.db"
+
+    conn = sqlite3.connect(db_path)
+
+    try:
+        conn.execute(
+            """
+            CREATE TABLE missions (
+                id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL,
+                assigned_agent TEXT NOT NULL,
+                priority TEXT NOT NULL,
+                progress INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            INSERT INTO missions (
+                id,
+                title,
+                status,
+                assigned_agent,
+                priority
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                5,
+                (
+                    "Build a persistent FastAPI task service, "
+                    "restart it, and verify persistence"
+                ),
+                "Running",
+                "Planner",
+                "Normal",
+            ),
+        )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    def fake_get_connection():
+        connection = sqlite3.connect(db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    calls = []
+
+    def fake_chat_with_ollama(
+        *,
+        model,
+        messages,
+        stream,
+        timeout,
+    ):
+        calls.append(messages)
+
+        if len(calls) == 1:
+            return {
+                "message": {
+                    "content": (
+                        "1. Create FastAPI service in main.py\n"
+                        "2. Success-check\n"
+                        "curl http://localhost:8000/tasks "
+                        "| grep 'Buy milk'\n"
+                        "kill $(pgrep -f main.py)"
+                    )
+                }
+            }
+
+        return {
+            "message": {
+                "content": (
+                    "1. Create FastAPI service in main.py\n"
+                    "2. Implement SQLite persistence in main.py\n"
+                    "3. Success-check\n"
+                    "HTTP POST /tasks\n"
+                    'JSON body must equal {"title":"Buy milk"}\n'
+                    "HTTP status must equal 200\n"
+                    'JSON response must equal {"title":"Buy milk"}\n'
+                    "HTTP GET /tasks\n"
+                    "HTTP status must equal 200\n"
+                    'JSON response must equal '
+                    '[{"title":"Buy milk"}]\n'
+                    "Restart service\n"
+                    "HTTP GET /tasks\n"
+                    "HTTP status must equal 200\n"
+                    'JSON response must equal '
+                    '[{"title":"Buy milk"}]'
+                )
+            }
+        }
+
+    monkeypatch.setattr(
+        planner,
+        "get_connection",
+        fake_get_connection,
+    )
+    monkeypatch.setattr(
+        planner,
+        "chat_with_ollama",
+        fake_chat_with_ollama,
+    )
+    monkeypatch.setattr(
+        planner,
+        "log_event",
+        lambda *args, **kwargs: None,
+    )
+
+    result = planner.create_plan(5)
+
+    assert len(calls) == 2
+    assert result["status"] == "Ready"
+    assert "HTTP POST /tasks" in result["plan"]
+    assert "Restart service" in result["plan"]
+
+    correction = calls[1][-1]["content"]
+
+    assert "violated the NUTTZ-OS HTTP Planner contract" in correction
+    assert "Do not use curl" in correction
+
+    conn = fake_get_connection()
+
+    try:
+        stored = conn.execute(
+            """
+            SELECT plan, status
+            FROM mission_plans
+            WHERE mission_id=?
+            """,
+            (5,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert stored is not None
+    assert stored["status"] == "Ready"
+    assert "HTTP POST /tasks" in stored["plan"]
+    assert "curl " not in stored["plan"].lower()
