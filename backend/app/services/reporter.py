@@ -22,12 +22,30 @@ def ensure_deliverable_table() -> None:
                 model TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'Ready',
                 content TEXT NOT NULL,
+                claims_json TEXT NOT NULL DEFAULT '[]',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (mission_id) REFERENCES missions(id)
             )
             """
         )
+
+        columns = {
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA table_info(mission_deliverables)"
+            ).fetchall()
+        }
+
+        if "claims_json" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE mission_deliverables
+                ADD COLUMN claims_json TEXT
+                NOT NULL DEFAULT '[]'
+                """
+            )
+
         conn.commit()
     finally:
         conn.close()
@@ -272,6 +290,168 @@ def _task_provenance_map(
     ]
 
 
+
+
+def _parse_reporter_envelope(
+    content: str,
+) -> dict[str, Any]:
+    try:
+        envelope = json.loads(content)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError(
+            "Reporter response must be valid JSON."
+        ) from exc
+
+    if not isinstance(envelope, dict):
+        raise ValueError(
+            "Reporter response must be a JSON object."
+        )
+
+    allowed_fields = {
+        "deliverable",
+        "claims",
+    }
+    unexpected = set(envelope) - allowed_fields
+
+    if unexpected:
+        raise ValueError(
+            "Reporter response contains unexpected fields: "
+            + ", ".join(sorted(unexpected))
+        )
+
+    deliverable = envelope.get("deliverable")
+
+    if (
+        not isinstance(deliverable, str)
+        or not deliverable.strip()
+    ):
+        raise ValueError(
+            "Reporter response requires a non-empty "
+            "deliverable."
+        )
+
+    claims = envelope.get("claims")
+
+    if not isinstance(claims, list):
+        raise ValueError(
+            "Reporter response requires a claims list."
+        )
+
+    return {
+        "deliverable": deliverable,
+        "claims": claims,
+    }
+
+
+def _validate_claim_provenance(
+    claims: Any,
+    task_provenance: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not isinstance(claims, list):
+        raise ValueError(
+            "Reporter claims must be a list."
+        )
+
+    provenance_by_position = {
+        item.get("position"): item
+        for item in task_provenance
+    }
+
+    for claim in claims:
+        if not isinstance(claim, dict):
+            raise ValueError(
+                "Each Reporter claim must be an object."
+            )
+
+        text = claim.get("text")
+
+        if (
+            not isinstance(text, str)
+            or not text.strip()
+        ):
+            raise ValueError(
+                "Each Reporter claim requires text."
+            )
+
+        supported_by = claim.get("supported_by")
+
+        if (
+            not isinstance(supported_by, list)
+            or not supported_by
+        ):
+            raise ValueError(
+                "Each Reporter claim requires at least one "
+                "provenance reference."
+            )
+
+        for reference in supported_by:
+            if not isinstance(reference, dict):
+                raise ValueError(
+                    "Claim provenance reference must "
+                    "be an object."
+                )
+
+            position = reference.get(
+                "task_position"
+            )
+            evidence_type = reference.get(
+                "evidence_type"
+            )
+
+            if (
+                not isinstance(position, int)
+                or isinstance(position, bool)
+            ):
+                raise ValueError(
+                    "Claim provenance task_position "
+                    "must be an integer."
+                )
+
+            if (
+                not isinstance(evidence_type, str)
+                or not evidence_type.strip()
+            ):
+                raise ValueError(
+                    "Claim provenance evidence_type "
+                    "must be a non-empty string."
+                )
+
+            task = provenance_by_position.get(
+                position
+            )
+
+            if task is None:
+                raise ValueError(
+                    "Claim references unknown task position "
+                    f"{position!r}."
+                )
+
+            if task.get("status") != "Completed":
+                raise ValueError(
+                    "Claim references task that is "
+                    "not completed."
+                )
+
+            if task.get("verified") is not True:
+                raise ValueError(
+                    "Claim references task that is "
+                    "not verified."
+                )
+
+            evidence_types = task.get(
+                "evidence_types",
+                [],
+            )
+
+            if evidence_type not in evidence_types:
+                raise ValueError(
+                    "Claim references evidence type "
+                    "not verified for task."
+                )
+
+    return claims
+
+
 def _compact_tasks(
     tasks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -345,7 +525,13 @@ Your job is to synthesize the completed mission into a polished
 final deliverable.
 
 Rules:
-- Return only the finished deliverable.
+- Return only one valid JSON object with exactly two fields:
+  deliverable and claims.
+- Do not wrap the JSON in Markdown fences.
+- deliverable must contain the finished Markdown deliverable.
+- claims must be a JSON list of verified factual claims.
+- Each claim must contain text and supported_by.
+- Each supported_by entry must contain task_position and evidence_type.
 - Do not reveal internal reasoning.
 - Do not include <think> tags.
 - Use the supplied mission evidence.
@@ -418,6 +604,22 @@ Rules:
 
         content = _extract_content(response)
 
+        envelope = _parse_reporter_envelope(
+            content
+        )
+        _validate_claim_provenance(
+            envelope["claims"],
+            evidence["task_provenance"],
+        )
+        deliverable_content = envelope[
+            "deliverable"
+        ]
+        claims_json = json.dumps(
+            envelope["claims"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
         conn = get_connection()
 
         try:
@@ -436,21 +638,24 @@ Rules:
                         mission_id,
                         model,
                         status,
-                        content
+                        content,
+                        claims_json
                     )
                 VALUES
-                    (?, ?, 'Ready', ?)
+                    (?, ?, 'Ready', ?, ?)
                 ON CONFLICT(mission_id)
                 DO UPDATE SET
                     model=excluded.model,
                     status='Ready',
                     content=excluded.content,
+                    claims_json=excluded.claims_json,
                     updated_at=CURRENT_TIMESTAMP
                 """,
                 (
                     mission_id,
                     REPORTER_MODEL,
-                    content,
+                    deliverable_content,
+                    claims_json,
                 ),
             )
             conn.commit()
@@ -491,6 +696,7 @@ def get_deliverable(
                 model,
                 status,
                 content,
+                claims_json,
                 created_at,
                 updated_at
             FROM mission_deliverables
@@ -509,6 +715,9 @@ def get_deliverable(
         "model": row["model"],
         "status": row["status"],
         "content": row["content"],
+        "claims": json.loads(
+            row["claims_json"] or "[]"
+        ),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }

@@ -450,11 +450,31 @@ def test_golden_9916_http_service_mission(
 
         return {
             "message": {
-                "content": (
-                    "# Golden 9916 HTTP Deliverable\n\n"
-                    "The FastAPI SQLite service was "
-                    "verified across restart.\n\n"
-                    "Mission outcome: Completed."
+                "content": json.dumps(
+                    {
+                        "deliverable": (
+                            "# Golden 9916 HTTP Deliverable\n\n"
+                            "The FastAPI SQLite service was "
+                            "verified across restart.\n\n"
+                            "Mission outcome: Completed."
+                        ),
+                        "claims": [
+                            {
+                                "text": (
+                                    "The FastAPI SQLite service "
+                                    "was verified across restart."
+                                ),
+                                "supported_by": [
+                                    {
+                                        "task_position": 6,
+                                        "evidence_type": (
+                                            "http_service_verified"
+                                        ),
+                                    }
+                                ],
+                            }
+                        ],
+                    }
                 )
             }
         }
