@@ -437,6 +437,38 @@ def test_golden_9911_workspace_mission(
         user_prompt = messages[1]["content"]
 
         assert "MISSION EVIDENCE:" in user_prompt
+
+        evidence = json.loads(
+            user_prompt.split(
+                "MISSION EVIDENCE:\n",
+                1,
+            )[1]
+        )
+
+        provenance = evidence["task_provenance"]
+
+        assert [
+            item["evidence_types"]
+            for item in provenance
+        ] == [
+            ["builder_verified"],
+            ["builder_verified"],
+            ["builder_verified"],
+            ["builder_verified"],
+            ["workspace_verified"],
+        ]
+
+        assert all(
+            item["status"] == "Completed"
+            and item["verified"] is True
+            for item in provenance
+        )
+
+        assert (
+            "machine-derived verification metadata"
+            in messages[0]["content"]
+        )
+
         assert (
             "only when they are explicitly supported"
             in messages[0]["content"]

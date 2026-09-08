@@ -177,6 +177,101 @@ def _compact_text(
     return text[:limit].rstrip() + "\n...[truncated]"
 
 
+def _verified_evidence_block(
+    result: str,
+    *,
+    header: str,
+    evidence_marker: str,
+    require_service_stopped: bool = False,
+) -> bool:
+    if not result.startswith(header + "\n"):
+        return False
+
+    marker = evidence_marker + "\n"
+
+    if marker not in result:
+        return False
+
+    evidence_text = result.split(marker, 1)[1]
+
+    decoder = json.JSONDecoder()
+
+    try:
+        evidence, _ = decoder.raw_decode(
+            evidence_text.lstrip()
+        )
+    except (json.JSONDecodeError, TypeError):
+        return False
+
+    if not isinstance(evidence, dict):
+        return False
+
+    if evidence.get("verified") is not True:
+        return False
+
+    if (
+        require_service_stopped
+        and evidence.get("service_stopped") is not True
+    ):
+        return False
+
+    return True
+
+
+def _task_provenance(
+    task: dict[str, Any],
+) -> dict[str, Any]:
+    result = task.get("result", "") or ""
+
+    evidence_types: list[str] = []
+
+    if task.get("status") != "Completed":
+        return {
+            "position": task.get("position"),
+            "status": task.get("status"),
+            "evidence_types": [],
+            "verified": False,
+        }
+
+    if _verified_evidence_block(
+        result,
+        header="BUILDER AGENT: COMPLETED",
+        evidence_marker="VERIFIED BUILDER EVIDENCE:",
+    ):
+        evidence_types.append("builder_verified")
+
+    if _verified_evidence_block(
+        result,
+        header="WORKSPACE EXECUTION: VERIFIED",
+        evidence_marker="VERIFIED EXECUTION EVIDENCE:",
+    ):
+        evidence_types.append("workspace_verified")
+
+    if _verified_evidence_block(
+        result,
+        header="HTTP SERVICE EXECUTION: VERIFIED",
+        evidence_marker="VERIFIED HTTP SERVICE EVIDENCE:",
+        require_service_stopped=True,
+    ):
+        evidence_types.append("http_service_verified")
+
+    return {
+        "position": task.get("position"),
+        "status": task.get("status"),
+        "evidence_types": evidence_types,
+        "verified": bool(evidence_types),
+    }
+
+
+def _task_provenance_map(
+    tasks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        _task_provenance(task)
+        for task in tasks
+    ]
+
+
 def _compact_tasks(
     tasks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -266,6 +361,7 @@ Rules:
 - Never infer a limitation merely because a feature, safeguard, test, or
   implementation detail is not mentioned in the evidence.
 - Do not contradict verified mission evidence with speculative caveats.
+- Treat task_provenance as machine-derived verification metadata. Describe a task as verified only when its provenance entry has verified=true, and limit that verification claim to the listed evidence_types.
 - If the evidence contains no supported limitations or unresolved items,
   omit a limitations section entirely.
 - Keep the entire deliverable under 350 words.
@@ -285,6 +381,7 @@ Rules:
         "plan": _compact_text(plan, 1200),
         "research": _compact_text(research, 1200),
         "tasks": _compact_tasks(tasks),
+        "task_provenance": _task_provenance_map(tasks),
     }
 
     user_prompt = (
