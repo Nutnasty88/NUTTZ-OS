@@ -265,8 +265,21 @@ def test_create_plan_defines_structured_http_service_contract(
             "message": {
                 "content": (
                     "1. Create FastAPI service in main.py\n"
-                    "2. Verify HTTP persistence\n"
-                    "3. Success-check"
+                    "2. Implement SQLite persistence in main.py\n"
+                    "3. Success-check\n"
+                    "HTTP POST /tasks\n"
+                    'JSON body must equal {"title":"Buy milk"}\n'
+                    "HTTP status must equal 200\n"
+                    'JSON response must equal {"title":"Buy milk"}\n'
+                    "HTTP GET /tasks\n"
+                    "HTTP status must equal 200\n"
+                    'JSON response must equal '
+                    '[{"title":"Buy milk"}]\n'
+                    "Restart service\n"
+                    "HTTP GET /tasks\n"
+                    "HTTP status must equal 200\n"
+                    'JSON response must equal '
+                    '[{"title":"Buy milk"}]'
                 )
             }
         }
@@ -327,4 +340,258 @@ def test_create_plan_defines_structured_http_service_contract(
     assert (
         "Do not introduce SQLAlchemy merely to implement SQLite."
         in normalized_prompt
+    )
+
+
+def test_http_planner_rejects_shell_verification(
+    monkeypatch,
+    tmp_path,
+):
+    db_path = tmp_path / "planner-http-reject.db"
+
+    conn = sqlite3.connect(db_path)
+
+    try:
+        conn.execute(
+            """
+            CREATE TABLE missions (
+                id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL,
+                assigned_agent TEXT NOT NULL,
+                priority TEXT NOT NULL,
+                progress INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            INSERT INTO missions (
+                id,
+                title,
+                status,
+                assigned_agent,
+                priority
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                3,
+                (
+                    "Build a persistent FastAPI task service, "
+                    "restart it, and verify persistence"
+                ),
+                "Running",
+                "Planner",
+                "Normal",
+            ),
+        )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    def fake_get_connection():
+        connection = sqlite3.connect(db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def fake_chat_with_ollama(**kwargs):
+        return {
+            "message": {
+                "content": (
+                    "1. Create FastAPI service in main.py\n"
+                    "2. Success-check\n"
+                    "curl -s http://localhost:8000/tasks "
+                    "| grep 'Buy milk'\n"
+                    "kill $(pgrep -f main.py)"
+                )
+            }
+        }
+
+    monkeypatch.setattr(
+        planner,
+        "get_connection",
+        fake_get_connection,
+    )
+    monkeypatch.setattr(
+        planner,
+        "chat_with_ollama",
+        fake_chat_with_ollama,
+    )
+    monkeypatch.setattr(
+        planner,
+        "log_event",
+        lambda *args, **kwargs: None,
+    )
+
+    try:
+        planner.create_plan(3)
+    except RuntimeError as error:
+        assert (
+            "Planner HTTP contract violation"
+            in str(error)
+        )
+        assert (
+            "shell-style HTTP verification is not allowed"
+            in str(error)
+        )
+    else:
+        raise AssertionError(
+            "Expected shell-style HTTP plan to be rejected."
+        )
+
+    conn = fake_get_connection()
+
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM mission_plans
+            WHERE mission_id=?
+            """,
+            (3,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        count = 0
+    else:
+        count = row["count"]
+    finally:
+        conn.close()
+
+    assert count == 0
+
+
+def test_http_planner_accepts_structured_verification(
+    monkeypatch,
+    tmp_path,
+):
+    db_path = tmp_path / "planner-http-accept.db"
+
+    conn = sqlite3.connect(db_path)
+
+    try:
+        conn.execute(
+            """
+            CREATE TABLE missions (
+                id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL,
+                assigned_agent TEXT NOT NULL,
+                priority TEXT NOT NULL,
+                progress INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            INSERT INTO missions (
+                id,
+                title,
+                status,
+                assigned_agent,
+                priority
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                4,
+                (
+                    "Build a persistent FastAPI task service, "
+                    "restart it, and verify persistence"
+                ),
+                "Running",
+                "Planner",
+                "Normal",
+            ),
+        )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    def fake_get_connection():
+        connection = sqlite3.connect(db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def fake_chat_with_ollama(**kwargs):
+        return {
+            "message": {
+                "content": (
+                    "1. Create FastAPI service in main.py\n"
+                    "2. Implement SQLite persistence in main.py\n"
+                    "3. Success-check\n"
+                    "HTTP POST /tasks\n"
+                    'JSON body must equal {"title":"Buy milk"}\n'
+                    "HTTP status must equal 200\n"
+                    'JSON response must equal {"title":"Buy milk"}\n'
+                    "HTTP GET /tasks\n"
+                    "HTTP status must equal 200\n"
+                    'JSON response must equal '
+                    '[{"title":"Buy milk"}]\n'
+                    "Restart service\n"
+                    "HTTP GET /tasks\n"
+                    "HTTP status must equal 200\n"
+                    'JSON response must equal '
+                    '[{"title":"Buy milk"}]'
+                )
+            }
+        }
+
+    monkeypatch.setattr(
+        planner,
+        "get_connection",
+        fake_get_connection,
+    )
+    monkeypatch.setattr(
+        planner,
+        "chat_with_ollama",
+        fake_chat_with_ollama,
+    )
+    monkeypatch.setattr(
+        planner,
+        "log_event",
+        lambda *args, **kwargs: None,
+    )
+
+    result = planner.create_plan(4)
+
+    assert result["status"] == "Ready"
+    assert "HTTP POST /tasks" in result["plan"]
+    assert "Restart service" in result["plan"]
+
+    conn = fake_get_connection()
+
+    try:
+        stored = conn.execute(
+            """
+            SELECT plan, status
+            FROM mission_plans
+            WHERE mission_id=?
+            """,
+            (4,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert stored is not None
+    assert stored["status"] == "Ready"
+    assert "HTTP POST /tasks" in stored["plan"]
+
+
+def test_cli_planner_is_not_subject_to_http_contract():
+    planner._validate_http_service_plan(
+        mission_title=(
+            "Build a Python CLI that prints Hello"
+        ),
+        plan=(
+            "1. Create main.py\n"
+            "2. Success-check\n"
+            "python main.py"
+        ),
     )

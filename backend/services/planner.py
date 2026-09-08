@@ -48,6 +48,106 @@ def extract_plan(response: dict[str, Any]) -> str:
     return plan
 
 
+def _is_http_service_mission(title: str) -> bool:
+    normalized = title.lower()
+
+    return any(
+        marker in normalized
+        for marker in (
+            "fastapi",
+            "http service",
+            "api service",
+            "web service",
+        )
+    )
+
+
+def _validate_http_service_plan(
+    mission_title: str,
+    plan: str,
+) -> None:
+    """Reject HTTP plans that cannot use managed HTTP verification."""
+    if not _is_http_service_mission(mission_title):
+        return
+
+    normalized = plan.lower()
+
+    shell_markers = (
+        "curl ",
+        "grep ",
+        "kill ",
+        "pkill ",
+        "nohup ",
+        "uvicorn ",
+        "python main.py &",
+        "python3 main.py &",
+        " | ",
+        " && ",
+        " ; ",
+    )
+
+    violations = [
+        marker.strip()
+        for marker in shell_markers
+        if marker in normalized
+    ]
+
+    if violations:
+        raise RuntimeError(
+            "Planner HTTP contract violation: shell-style HTTP "
+            "verification is not allowed: "
+            + ", ".join(violations)
+        )
+
+    has_http_request = any(
+        line.strip().upper().startswith(
+            ("HTTP GET ", "HTTP POST ")
+        )
+        for line in plan.splitlines()
+    )
+
+    if not has_http_request:
+        raise RuntimeError(
+            "Planner HTTP contract violation: structured HTTP "
+            "GET/POST verification is required."
+        )
+
+    has_http_status = any(
+        line.strip().lower().startswith(
+            "http status must equal "
+        )
+        for line in plan.splitlines()
+    )
+
+    if not has_http_status:
+        raise RuntimeError(
+            "Planner HTTP contract violation: each HTTP success "
+            "contract requires an HTTP status requirement."
+        )
+
+    persistence_required = any(
+        marker in mission_title.lower()
+        for marker in (
+            "restart",
+            "persistent",
+            "persistence",
+            "still exists",
+        )
+    )
+
+    if persistence_required:
+        has_restart = any(
+            line.strip().lower() == "restart service"
+            for line in plan.splitlines()
+        )
+
+        if not has_restart:
+            raise RuntimeError(
+                "Planner HTTP contract violation: persistent HTTP "
+                "missions require an explicit Restart service step."
+            )
+
+
 def create_plan(mission_id: int) -> dict[str, Any]:
     log_event(
     mission_id,
@@ -172,6 +272,11 @@ Current status: {mission["status"]}
     )
 
     plan = extract_plan(response)
+
+    _validate_http_service_plan(
+        mission_title=mission["title"],
+        plan=plan,
+    )
 
     conn = get_connection()
 
