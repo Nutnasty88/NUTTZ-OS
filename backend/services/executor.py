@@ -3082,6 +3082,273 @@ def _complete_workspace_execution_task(
     }
 
 
+def _complete_http_service_execution_task(
+    mission: Any,
+    task: Any,
+    execution_token: str,
+    worker_owner_token: str | None,
+) -> dict[str, Any]:
+    """Execute and persist verified HTTP service evidence."""
+    mission_id = int(mission["id"])
+
+    artifact_path = _select_python_artifact(
+        mission_id,
+        task,
+    )
+
+    log_event(
+        mission_id,
+        "Executor",
+        "routing",
+        (
+            f"Task {task['position']} routed to managed HTTP "
+            f"service verification for {artifact_path}"
+        ),
+    )
+
+    try:
+        evidence = _execute_structured_http_service_task(
+            mission_id,
+            task,
+            artifact_path,
+        )
+
+        if evidence.get("verified") is not True:
+            raise RuntimeError(
+                "HTTP service failed deterministic verification."
+                + "\n\n"
+                + json.dumps(
+                    evidence,
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+
+        if evidence.get("service_stopped") is not True:
+            raise RuntimeError(
+                "HTTP service verification completed but the managed "
+                "service did not stop cleanly."
+            )
+
+        manifest_result = write_project_manifest(
+            workspace_name=evidence["workspace"],
+            mission_id=mission_id,
+            entrypoint=evidence["artifact"],
+            runtime="python",
+            run_command=[
+                "python-asgi",
+                evidence["artifact"],
+            ],
+            artifact_sha256=evidence[
+                "artifact_sha256"
+            ],
+            artifact_size_bytes=evidence[
+                "artifact_size_bytes"
+            ],
+            verified=True,
+            launch_type="python-asgi",
+        )
+
+        log_event(
+            mission_id,
+            "Workspace Executor",
+            "manifest",
+            (
+                "Verified ASGI project manifest written for "
+                f"{evidence['artifact']}"
+            ),
+        )
+
+        result = (
+            "HTTP SERVICE EXECUTION: VERIFIED\n\n"
+            f"Artifact: {artifact_path}\n"
+            f"Checks: {evidence.get('check_count', 0)}/"
+            f"{evidence.get('requested_check_count', 0)}\n"
+            f"Restarts: {evidence.get('restart_count', 0)}\n"
+            f"Service stopped: {evidence.get('service_stopped')}\n"
+            "\nVERIFIED HTTP SERVICE EVIDENCE:\n"
+            + json.dumps(
+                evidence,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+
+    except Exception as error:
+        conn = get_connection()
+
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+
+            _assert_terminal_worker_ownership(
+                conn,
+                mission_id,
+                worker_owner_token,
+            )
+
+            cursor = conn.execute(
+                """
+                UPDATE mission_tasks
+                SET
+                    status='Error',
+                    result=?,
+                    execution_token=NULL
+                WHERE id=?
+                  AND status='Running'
+                  AND execution_token=?
+                """,
+                (
+                    str(error),
+                    task["id"],
+                    execution_token,
+                ),
+            )
+
+            if cursor.rowcount != 1:
+                conn.rollback()
+                raise RuntimeError(
+                    f'Task {task["id"]} HTTP execution failed after '
+                    "its persisted Running state was lost."
+                ) from error
+
+            conn.execute(
+                """
+                UPDATE missions
+                SET
+                    status='Error',
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+                """,
+                (mission_id,),
+            )
+
+            conn.commit()
+        finally:
+            conn.close()
+
+        log_event(
+            mission_id,
+            "Workspace Executor",
+            "http_error",
+            (
+                f"HTTP verification failed for task "
+                f"{task['position']}: {error}"
+            ),
+        )
+
+        raise
+
+    conn = get_connection()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        _assert_terminal_worker_ownership(
+            conn,
+            mission_id,
+            worker_owner_token,
+        )
+
+        cursor = conn.execute(
+            """
+            UPDATE mission_tasks
+            SET
+                status='Completed',
+                result=?,
+                completed_at=CURRENT_TIMESTAMP,
+                execution_token=NULL
+            WHERE id=?
+              AND status='Running'
+              AND execution_token=?
+            """,
+            (
+                result,
+                task["id"],
+                execution_token,
+            ),
+        )
+
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise RuntimeError(
+                f'Task {task["id"]} HTTP completion was rejected '
+                "because its persisted Running state was lost."
+            )
+
+        counts = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(
+                    CASE
+                        WHEN status='Completed' THEN 1
+                        ELSE 0
+                    END
+                ) AS completed
+            FROM mission_tasks
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        total = counts["total"] or 1
+        completed = counts["completed"] or 0
+
+        if completed == total:
+            progress = 99
+        else:
+            progress = 20 + int(
+                (completed / total) * 80
+            )
+
+        mission_status = "Running"
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET
+                status=?,
+                progress=?,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (
+                mission_status,
+                progress,
+                mission_id,
+            ),
+        )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    log_event(
+        mission_id,
+        "Workspace Executor",
+        "http_completed",
+        (
+            f"Task {task['position']} verified HTTP service "
+            f"{artifact_path}"
+        ),
+    )
+
+    return {
+        "mission_id": mission_id,
+        "task_id": task["id"],
+        "position": task["position"],
+        "title": task["title"],
+        "status": "Completed",
+        "result": result,
+        "mission_status": mission_status,
+        "progress": progress,
+        "tool_results": [],
+        "evidence": evidence,
+        "manifest": manifest_result,
+        "agent": "Workspace Executor",
+    }
+
+
 BUILDER_TASK_PATTERN = re.compile(
     r"""
     \b(
@@ -5510,6 +5777,14 @@ def execute_next_task(
 
     if _is_builder_task(task):
         return _complete_builder_task(
+            mission=mission,
+            task=task,
+            execution_token=execution_token,
+            worker_owner_token=worker_owner_token,
+        )
+
+    if _is_http_service_execution_task(task):
+        return _complete_http_service_execution_task(
             mission=mission,
             task=task,
             execution_token=execution_token,

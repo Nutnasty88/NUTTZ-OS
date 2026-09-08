@@ -1,6 +1,7 @@
 import sqlite3
 
 from services.executor import (
+    _complete_http_service_execution_task,
     _execute_structured_http_service_task,
     _is_http_service_execution_task,
     _structured_http_service_checks,
@@ -1485,3 +1486,265 @@ def test_http_executor_adapter_rejects_entrypoint_mismatch(
         )
 
     assert called is False
+
+
+
+def test_http_routing_precedes_generic_workspace_routing():
+    import inspect
+    import services.executor as executor_service
+
+    source = inspect.getsource(
+        executor_service.execute_next_task
+    )
+
+    http_index = source.index(
+        "if _is_http_service_execution_task(task):"
+    )
+    workspace_index = source.index(
+        "if _is_workspace_execution_task(task):"
+    )
+
+    assert http_index < workspace_index
+
+
+def test_complete_http_service_task_writes_asgi_manifest(
+    monkeypatch,
+):
+    manifest_calls = []
+    events = []
+
+    evidence = {
+        "verified": True,
+        "workspace": "mission-1234",
+        "artifact": "main.py",
+        "artifact_sha256": "a" * 64,
+        "artifact_size_bytes": 321,
+        "requested_check_count": 2,
+        "check_count": 2,
+        "restart_count": 1,
+        "service_stopped": True,
+        "steps": [],
+    }
+
+    monkeypatch.setattr(
+        "services.executor._select_python_artifact",
+        lambda mission_id, task: "main.py",
+    )
+
+    monkeypatch.setattr(
+        "services.executor._execute_structured_http_service_task",
+        lambda mission_id, task, artifact_path: evidence,
+    )
+
+    def fake_write_project_manifest(**kwargs):
+        manifest_calls.append(kwargs)
+        return {
+            "manifest": {
+                "schema_version": 3,
+                "launch_type": "python-asgi",
+            }
+        }
+
+    monkeypatch.setattr(
+        "services.executor.write_project_manifest",
+        fake_write_project_manifest,
+    )
+
+    monkeypatch.setattr(
+        "services.executor._assert_terminal_worker_ownership",
+        lambda *args, **kwargs: None,
+    )
+
+    monkeypatch.setattr(
+        "services.executor.log_event",
+        lambda *args: events.append(args),
+    )
+
+    class FakeCursor:
+        def __init__(
+            self,
+            *,
+            rowcount=1,
+            row=None,
+        ):
+            self.rowcount = rowcount
+            self._row = row
+
+        def fetchone(self):
+            return self._row
+
+    class FakeConnection:
+        def execute(self, sql, params=None):
+            normalized = " ".join(sql.split())
+
+            if normalized.startswith(
+                "SELECT COUNT(*) AS total"
+            ):
+                return FakeCursor(
+                    row={
+                        "total": 1,
+                        "completed": 1,
+                    }
+                )
+
+            return FakeCursor(rowcount=1)
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "services.executor.get_connection",
+        lambda: FakeConnection(),
+    )
+
+    result = _complete_http_service_execution_task(
+        mission={
+            "id": 1234,
+            "title": "Build HTTP service",
+        },
+        task={
+            "id": 55,
+            "position": 3,
+            "title": "Verify HTTP service",
+            "instructions": (
+                "Success-check:\n"
+                "HTTP GET /tasks\n"
+                "HTTP status must equal 200"
+            ),
+        },
+        execution_token="execution-token",
+        worker_owner_token=None,
+    )
+
+    assert result["status"] == "Completed"
+    assert result["agent"] == "Workspace Executor"
+    assert result["progress"] == 99
+    assert result["evidence"] == evidence
+
+    assert manifest_calls == [
+        {
+            "workspace_name": "mission-1234",
+            "mission_id": 1234,
+            "entrypoint": "main.py",
+            "runtime": "python",
+            "run_command": [
+                "python-asgi",
+                "main.py",
+            ],
+            "artifact_sha256": "a" * 64,
+            "artifact_size_bytes": 321,
+            "verified": True,
+            "launch_type": "python-asgi",
+        }
+    ]
+
+
+def test_complete_http_service_task_requires_service_stopped(
+    monkeypatch,
+):
+    manifest_calls = []
+
+    evidence = {
+        "verified": True,
+        "workspace": "mission-1235",
+        "artifact": "main.py",
+        "artifact_sha256": "b" * 64,
+        "artifact_size_bytes": 456,
+        "requested_check_count": 1,
+        "check_count": 1,
+        "restart_count": 0,
+        "service_stopped": False,
+        "steps": [],
+    }
+
+    monkeypatch.setattr(
+        "services.executor._select_python_artifact",
+        lambda mission_id, task: "main.py",
+    )
+
+    monkeypatch.setattr(
+        "services.executor._execute_structured_http_service_task",
+        lambda mission_id, task, artifact_path: evidence,
+    )
+
+    def fake_write_project_manifest(**kwargs):
+        manifest_calls.append(kwargs)
+        raise AssertionError(
+            "Manifest must not be written before service shutdown."
+        )
+
+    monkeypatch.setattr(
+        "services.executor.write_project_manifest",
+        fake_write_project_manifest,
+    )
+
+    monkeypatch.setattr(
+        "services.executor._assert_terminal_worker_ownership",
+        lambda *args, **kwargs: None,
+    )
+
+    monkeypatch.setattr(
+        "services.executor.log_event",
+        lambda *args: None,
+    )
+
+    class FakeCursor:
+        rowcount = 1
+
+        def fetchone(self):
+            return None
+
+    class FakeConnection:
+        def execute(self, sql, params=None):
+            return FakeCursor()
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "services.executor.get_connection",
+        lambda: FakeConnection(),
+    )
+
+    try:
+        _complete_http_service_execution_task(
+            mission={
+                "id": 1235,
+                "title": "Build HTTP service",
+            },
+            task={
+                "id": 56,
+                "position": 3,
+                "title": "Verify HTTP service",
+                "instructions": (
+                    "Success-check:\n"
+                    "HTTP GET /tasks\n"
+                    "HTTP status must equal 200"
+                ),
+            },
+            execution_token="execution-token",
+            worker_owner_token=None,
+        )
+    except RuntimeError as error:
+        assert (
+            "did not stop cleanly"
+            in str(error)
+        )
+    else:
+        raise AssertionError(
+            "Expected stopped-service requirement to fail."
+        )
+
+    assert manifest_calls == []
