@@ -1092,36 +1092,10 @@ HTTP_RESTART_LINE_PATTERN = re.compile(
 )
 
 
-def _structured_http_service_checks(
-    task: Any,
+def _parse_structured_http_check_text(
+    task_text: str,
 ) -> list[dict[str, Any]]:
-    """
-    Parse the bounded structured HTTP verification grammar emitted by
-    Planner.
-
-    This parser returns request/check data only. It never executes shell
-    commands, opens sockets, or starts a service.
-    """
-    title_text = str(task["title"])
-    instructions_text = str(task["instructions"])
-
-    if title_text == instructions_text:
-        task_text = title_text
-    else:
-        task_text = (
-            f"{title_text}\n"
-            f"{instructions_text}"
-        )
-
-    success_match = re.search(
-        r"^\s*Success-check:\s*(?:\r?\n|$)",
-        task_text,
-        flags=re.IGNORECASE | re.MULTILINE,
-    )
-
-    if success_match is not None:
-        task_text = task_text[success_match.end():]
-
+    """Parse structured HTTP checks from one bounded text section."""
     checks: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
     restart_pending = False
@@ -1220,6 +1194,51 @@ def _structured_http_service_checks(
             return []
 
     return checks
+
+
+def _structured_http_service_checks(
+    task: Any,
+) -> list[dict[str, Any]]:
+    """
+    Parse the bounded structured HTTP verification grammar emitted by
+    Planner.
+
+    Prefer an explicit Success-check section when it contains valid
+    structured HTTP checks. If Planner numbering makes that summary
+    non-parseable, fall back to the task's own structured instructions.
+
+    This parser returns request/check data only. It never executes shell
+    commands, opens sockets, or starts a service.
+    """
+    title_text = str(task["title"])
+    instructions_text = str(task["instructions"])
+
+    if title_text == instructions_text:
+        task_text = title_text
+    else:
+        task_text = (
+            f"{title_text}\n"
+            f"{instructions_text}"
+        )
+
+    success_match = re.search(
+        r"^\s*Success-check:\s*(?:\r?\n|$)",
+        task_text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    if success_match is not None:
+        success_text = task_text[success_match.end():]
+        success_checks = _parse_structured_http_check_text(
+            success_text
+        )
+
+        if success_checks:
+            return success_checks
+
+        task_text = task_text[:success_match.start()]
+
+    return _parse_structured_http_check_text(task_text)
 
 
 def _is_http_service_execution_task(task: Any) -> bool:
@@ -3556,7 +3575,10 @@ def _future_project_task_state(
     later_execution = False
 
     for row in rows:
-        if _is_workspace_execution_task(row):
+        if (
+            _is_workspace_execution_task(row)
+            or _is_http_service_execution_task(row)
+        ):
             later_execution = True
 
         if _is_builder_task(row):

@@ -14,6 +14,7 @@ from services.executor import (
     _exact_stdout_requirement,
     _is_workspace_execution_task,
     _is_builder_task,
+    _future_project_task_state,
     CONDITIONAL_INSTALL_PATTERN,
 )
 
@@ -1248,6 +1249,47 @@ def test_structured_http_service_checks_parse_post_get_and_restart():
     ]
 
 
+
+def test_structured_http_parser_falls_back_to_task_instructions():
+    task = {
+        "title": "Restart service",
+        "instructions": (
+            "Restart service\n"
+            "HTTP GET /tasks\n"
+            "HTTP status must equal 200\n"
+            'JSON response must equal [{"title":"Buy milk"}]\n'
+            "\n"
+            "Success-check:\n"
+            "1. HTTP POST /tasks\n"
+            'JSON body must equal {"title":"Buy milk"}\n'
+            "HTTP status must equal 200\n"
+            'JSON response must equal {"title":"Buy milk"}\n'
+            "2. HTTP GET /tasks\n"
+            "HTTP status must equal 200\n"
+            'JSON response must equal [{"title":"Buy milk"}]\n'
+            "3. Restart service\n"
+            "4. HTTP GET /tasks\n"
+            "HTTP status must equal 200\n"
+            'JSON response must equal [{"title":"Buy milk"}]'
+        ),
+    }
+
+    assert _structured_http_service_checks(task) == [
+        {
+            "method": "GET",
+            "path": "/tasks",
+            "restart_before": True,
+            "expected_status": 200,
+            "expected_json": [
+                {
+                    "title": "Buy milk",
+                }
+            ],
+        }
+    ]
+
+    assert _is_http_service_execution_task(task) is True
+
 def test_structured_http_service_task_has_distinct_detector():
     task = {
         "title": "Verify HTTP API",
@@ -1748,3 +1790,78 @@ def test_complete_http_service_task_requires_service_stopped(
         )
 
     assert manifest_calls == []
+
+
+
+
+def test_future_http_execution_defers_builder_auto_run(
+    monkeypatch,
+    tmp_path,
+):
+    database_path = tmp_path / "future-http-execution.db"
+
+    connection = sqlite3.connect(database_path)
+
+    try:
+        connection.execute(
+            """
+            CREATE TABLE mission_tasks (
+                id INTEGER PRIMARY KEY,
+                mission_id INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                instructions TEXT NOT NULL,
+                status TEXT NOT NULL
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            INSERT INTO mission_tasks (
+                id,
+                mission_id,
+                position,
+                title,
+                instructions,
+                status
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                2,
+                9916,
+                2,
+                "Verify HTTP service",
+                (
+                    "HTTP POST /tasks\n"
+                    'JSON body must equal {"title":"Buy milk"}\n'
+                    "HTTP status must equal 200\n"
+                    'JSON response must equal {"title":"Buy milk"}'
+                ),
+                "Pending",
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    def fake_get_connection():
+        connection = sqlite3.connect(database_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    monkeypatch.setattr(
+        "services.executor.get_connection",
+        fake_get_connection,
+    )
+
+    state = _future_project_task_state(
+        mission_id=9916,
+        current_position=1,
+    )
+
+    assert state == {
+        "later_builder": False,
+        "later_execution": True,
+    }
