@@ -400,6 +400,18 @@ def test_golden_9916_http_service_mission(
         user_prompt = messages[1]["content"]
 
         assert "MISSION EVIDENCE:" in user_prompt
+        assert (
+            "only when they are explicitly supported"
+            in messages[0]["content"]
+        )
+        assert (
+            "Do not contradict verified mission evidence"
+            in messages[0]["content"]
+        )
+        assert (
+            "omit a limitations section entirely"
+            in messages[0]["content"]
+        )
         assert "Buy milk" in user_prompt
         assert "HTTP SERVICE EXECUTION: VERIFIED" in user_prompt
 

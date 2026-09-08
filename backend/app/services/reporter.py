@@ -260,7 +260,14 @@ Rules:
 - Include a brief executive summary.
 - Include only the most important findings or completed work.
 - Include verification/results when evidence exists.
-- Include limitations or unresolved items when appropriate.
+- State limitations, risks, failures, missing capabilities, or unresolved
+  items only when they are explicitly supported by the supplied mission
+  evidence.
+- Never infer a limitation merely because a feature, safeguard, test, or
+  implementation detail is not mentioned in the evidence.
+- Do not contradict verified mission evidence with speculative caveats.
+- If the evidence contains no supported limitations or unresolved items,
+  omit a limitations section entirely.
 - Keep the entire deliverable under 350 words.
 - Prefer concise synthesis over repeating every task.
 - End with a concise mission outcome.
