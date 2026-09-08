@@ -726,6 +726,14 @@ def test_http_planner_repairs_invalid_first_response(
 
     assert "violated the NUTTZ-OS HTTP Planner contract" in correction
     assert "Do not use curl" in correction
+    assert (
+        "The words above must appear exactly as `Restart service`"
+        in correction
+    )
+    assert (
+        "immediately before the HTTP request"
+        in correction
+    )
 
     conn = fake_get_connection()
 

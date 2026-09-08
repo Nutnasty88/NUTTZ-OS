@@ -302,8 +302,17 @@ For HTTP verification:
 - Write HTTP status must equal N for every verified request.
 - Use JSON body must equal for request bodies.
 - Use JSON response must equal for expected response bodies.
-- Write Restart service as its own line when persistence across
-  restart must be verified.
+- When persistence across restart must be verified, the exact
+  standalone line below is mandatory:
+
+Restart service
+
+- The words above must appear exactly as `Restart service` on a
+  line by themselves. Do not replace them with phrases such as
+  "restart the server", "restart the application", or shell
+  commands.
+- Put `Restart service` immediately before the HTTP request that
+  verifies state after the restart.
 
 Return only the corrected complete plan.
 """.strip()
