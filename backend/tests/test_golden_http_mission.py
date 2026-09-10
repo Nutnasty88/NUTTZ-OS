@@ -481,10 +481,6 @@ def test_golden_9916_http_service_mission(
                         "claims": [
                             {
                                 "kind": "service_restart_verified",
-                                "text": (
-                                    "The FastAPI SQLite service "
-                                    "was verified across restart."
-                                ),
                                 "supported_by": [
                                     {
                                             "fact_id": (
@@ -633,8 +629,8 @@ def test_golden_9916_http_service_mission(
 
     assert deliverable["content"] == (
         "## Verified Results\n\n"
-        "- The FastAPI SQLite service "
-        "was verified across restart."
+        "- The service restart was verified "
+        "(restart count: 1)."
     )
 
     assert (
@@ -671,8 +667,8 @@ def test_golden_9916_http_service_mission(
     assert deliverable["status"] == "Ready"
     assert deliverable["content"] == (
         "## Verified Results\n\n"
-        "- The FastAPI SQLite service "
-        "was verified across restart."
+        "- The service restart was verified "
+        "(restart count: 1)."
     )
 
     assert lease_row is None

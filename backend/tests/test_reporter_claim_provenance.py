@@ -36,7 +36,6 @@ def test_claim_accepts_exact_verified_fact_reference():
     claims = [
         {
             "kind": "execution_verified",
-            "text": "Execution was verified.",
             "supported_by": [
                 {
                     "fact_id": "task-1:execution",
@@ -65,7 +64,6 @@ def test_claim_rejects_unknown_fact_id():
     claims = [
         {
             "kind": "execution_verified",
-            "text": "Verified claim.",
             "supported_by": [
                 {
                     "fact_id": "task-99:missing",
@@ -96,7 +94,6 @@ def test_claim_rejects_missing_fact_id():
     claims = [
         {
             "kind": "execution_verified",
-            "text": "Verified claim.",
             "supported_by": [
                 {}
             ],
@@ -118,7 +115,6 @@ def test_claim_rejects_empty_fact_id():
     claims = [
         {
             "kind": "execution_verified",
-            "text": "Verified claim.",
             "supported_by": [
                 {
                     "fact_id": "   ",
@@ -142,7 +138,6 @@ def test_claim_rejects_unverified_task():
     claims = [
         {
             "kind": "execution_verified",
-            "text": "Verified claim.",
             "supported_by": [
                 {
                     "fact_id": "task-1:artifact",
@@ -177,7 +172,6 @@ def test_claim_rejects_non_completed_task():
     claims = [
         {
             "kind": "execution_verified",
-            "text": "Verified claim.",
             "supported_by": [
                 {
                     "fact_id": "task-1:artifact",
@@ -212,7 +206,6 @@ def test_claim_rejects_fact_with_wrong_evidence_type():
     claims = [
         {
             "kind": "execution_verified",
-            "text": "Verified claim.",
             "supported_by": [
                 {
                     "fact_id": "task-1:execution",
@@ -246,7 +239,6 @@ def test_claim_rejects_empty_support():
     claims = [
         {
             "kind": "execution_verified",
-            "text": "Unsupported claim.",
             "supported_by": [],
         }
     ]
@@ -262,28 +254,6 @@ def test_claim_rejects_empty_support():
         )
 
 
-def test_claim_rejects_empty_text():
-    claims = [
-        {
-            "kind": "execution_verified",
-            "text": "   ",
-            "supported_by": [
-                {
-                    "fact_id": "task-1:execution",
-                }
-            ],
-        }
-    ]
-
-    with pytest.raises(
-        ValueError,
-        match="text",
-    ):
-        reporter._validate_claim_provenance(
-            claims,
-            [],
-            [],
-        )
 
 
 def test_claim_rejects_non_list_claims():
@@ -292,7 +262,7 @@ def test_claim_rejects_non_list_claims():
         match="list",
     ):
         reporter._validate_claim_provenance(
-            {"text": "bad"},
+            {},
             [],
             [],
         )
@@ -302,7 +272,6 @@ def test_claim_rejects_non_object_reference():
     claims = [
         {
             "kind": "execution_verified",
-            "text": "Verified claim.",
             "supported_by": [
                 "task-1:execution"
             ],
@@ -324,7 +293,6 @@ def test_claim_rejects_non_string_fact_id():
     claims = [
         {
             "kind": "execution_verified",
-            "text": "Verified claim.",
             "supported_by": [
                 {
                     "fact_id": 1,
@@ -453,7 +421,6 @@ def test_claim_rejects_duplicate_verified_fact_ids():
     claims = [
         {
             "kind": "execution_verified",
-            "text": "Execution was verified.",
             "supported_by": [
                 {
                     "fact_id": "task-1:execution",
@@ -516,75 +483,12 @@ def test_reporter_envelope_rejects_legacy_deliverable_field():
         )
 
 
-def test_claim_rejects_restart_claim_without_restart_fact():
-    claims = [
-        {
-            "kind": "http_check_verified",
-            "text": (
-                "The service was verified across restart."
-            ),
-            "supported_by": [
-                {
-                    "fact_id": "task-6:http-check:1",
-                }
-            ],
-        }
-    ]
-
-    task_provenance = [
-        {
-            "position": 6,
-            "status": "Completed",
-            "evidence_types": [
-                "http_service_verified",
-            ],
-            "verified": True,
-        }
-    ]
-
-    verified_facts = [
-        {
-            "id": "task-6:http-check:1",
-            "type": "http_check_verified",
-            "task_position": 6,
-            "evidence_type": "http_service_verified",
-            "check_index": 1,
-            "method": "GET",
-            "path": "/tasks",
-            "status_code": 200,
-            "expected_status": 200,
-            "response_json": [
-                {
-                    "title": "Buy milk",
-                }
-            ],
-            "expected_json": [
-                {
-                    "title": "Buy milk",
-                }
-            ],
-            "restart_before": False,
-        }
-    ]
-
-    with pytest.raises(
-        ValueError,
-        match="restart",
-    ):
-        reporter._validate_claim_provenance(
-            claims,
-            task_provenance,
-            verified_facts,
-        )
 
 
 def test_claim_accepts_restart_claim_with_restart_fact():
     claims = [
         {
             "kind": "service_restart_verified",
-            "text": (
-                "The service was verified across restart."
-            ),
             "supported_by": [
                 {
                     "fact_id": "task-6:service-restart",
@@ -648,134 +552,13 @@ def test_claim_accepts_restart_claim_with_restart_fact():
     assert validated == claims
 
 
-@pytest.mark.parametrize(
-    "claim_text",
-    [
-        "The service was verified across restart.",
-        "The service restarted successfully.",
-        "The service is restarting.",
-        "The service restarts cleanly.",
-        "RESTART verification succeeded.",
-    ],
-)
-def test_restart_language_requires_restart_fact(
-    claim_text,
-):
-    claims = [
-        {
-            "kind": "http_check_verified",
-            "text": claim_text,
-            "supported_by": [
-                {
-                    "fact_id": "task-6:http-check:1",
-                }
-            ],
-        }
-    ]
-
-    task_provenance = [
-        {
-            "position": 6,
-            "status": "Completed",
-            "evidence_types": [
-                "http_service_verified",
-            ],
-            "verified": True,
-        }
-    ]
-
-    verified_facts = [
-        {
-            "id": "task-6:http-check:1",
-            "type": "http_check_verified",
-            "task_position": 6,
-            "evidence_type": "http_service_verified",
-            "check_index": 1,
-            "method": "GET",
-            "path": "/tasks",
-            "status_code": 200,
-            "expected_status": 200,
-            "response_json": [],
-            "expected_json": [],
-            "restart_before": False,
-        }
-    ]
-
-    with pytest.raises(
-        ValueError,
-        match="restart",
-    ):
-        reporter._validate_claim_provenance(
-            claims,
-            task_provenance,
-            verified_facts,
-        )
 
 
-@pytest.mark.parametrize(
-    "claim_text",
-    [
-        "The service returned HTTP 200.",
-        "The restartable configuration was generated.",
-        "The prerestartcheck artifact exists.",
-    ],
-)
-def test_non_restart_language_does_not_require_restart_fact(
-    claim_text,
-):
-    claims = [
-        {
-            "kind": "http_check_verified",
-            "text": claim_text,
-            "supported_by": [
-                {
-                    "fact_id": "task-6:http-check:1",
-                }
-            ],
-        }
-    ]
-
-    task_provenance = [
-        {
-            "position": 6,
-            "status": "Completed",
-            "evidence_types": [
-                "http_service_verified",
-            ],
-            "verified": True,
-        }
-    ]
-
-    verified_facts = [
-        {
-            "id": "task-6:http-check:1",
-            "type": "http_check_verified",
-            "task_position": 6,
-            "evidence_type": "http_service_verified",
-            "check_index": 1,
-            "method": "GET",
-            "path": "/tasks",
-            "status_code": 200,
-            "expected_status": 200,
-            "response_json": [],
-            "expected_json": [],
-            "restart_before": False,
-        }
-    ]
-
-    validated = reporter._validate_claim_provenance(
-        claims,
-        task_provenance,
-        verified_facts,
-    )
-
-    assert validated == claims
 
 
 def test_typed_claim_requires_kind():
     claims = [
         {
-            "text": "The service was verified across restart.",
             "supported_by": [
                 {
                     "fact_id": "task-6:service-restart",
@@ -820,7 +603,6 @@ def test_typed_claim_rejects_kind_fact_mismatch():
     claims = [
         {
             "kind": "service_restart_verified",
-            "text": "The service was verified across restart.",
             "supported_by": [
                 {
                     "fact_id": "task-6:http-check:1",
@@ -872,7 +654,6 @@ def test_typed_restart_claim_accepts_matching_fact():
     claims = [
         {
             "kind": "service_restart_verified",
-            "text": "The service was verified across restart.",
             "supported_by": [
                 {
                     "fact_id": "task-6:service-restart",
@@ -909,3 +690,138 @@ def test_typed_restart_claim_accepts_matching_fact():
     )
 
     assert validated == claims
+
+
+def test_selector_claim_accepts_kind_and_support_only():
+    claims = [
+        {
+            "kind": "execution_verified",
+            "supported_by": [
+                {
+                    "fact_id": "task-1:execution",
+                }
+            ],
+        }
+    ]
+
+    task_provenance = [
+        {
+            "position": 1,
+            "status": "Completed",
+            "verified": True,
+            "evidence_types": [
+                "workspace_verified",
+            ],
+        }
+    ]
+
+    verified_facts = [
+        {
+            "id": "task-1:execution",
+            "type": "execution_verified",
+            "task_position": 1,
+            "evidence_type": "workspace_verified",
+            "artifact": "main.py",
+            "exit_code": 0,
+        }
+    ]
+
+    validated = reporter._validate_claim_provenance(
+        claims,
+        task_provenance,
+        verified_facts,
+    )
+
+    assert validated == claims
+
+
+def test_selector_claim_rejects_model_authored_text():
+    claims = [
+        {
+            "kind": "execution_verified",
+            "text": "The model must not author deliverable prose.",
+            "supported_by": [
+                {
+                    "fact_id": "task-1:execution",
+                }
+            ],
+        }
+    ]
+
+    task_provenance = [
+        {
+            "position": 1,
+            "status": "Completed",
+            "verified": True,
+            "evidence_types": [
+                "workspace_verified",
+            ],
+        }
+    ]
+
+    verified_facts = [
+        {
+            "id": "task-1:execution",
+            "type": "execution_verified",
+            "task_position": 1,
+            "evidence_type": "workspace_verified",
+            "artifact": "main.py",
+            "exit_code": 0,
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="unexpected",
+    ):
+        reporter._validate_claim_provenance(
+            claims,
+            task_provenance,
+            verified_facts,
+        )
+
+
+def test_selector_claim_rejects_unknown_semantic_field():
+    claims = [
+        {
+            "kind": "execution_verified",
+            "summary": "Model-authored semantic escape hatch.",
+            "supported_by": [
+                {
+                    "fact_id": "task-1:execution",
+                }
+            ],
+        }
+    ]
+
+    task_provenance = [
+        {
+            "position": 1,
+            "status": "Completed",
+            "verified": True,
+            "evidence_types": [
+                "workspace_verified",
+            ],
+        }
+    ]
+
+    verified_facts = [
+        {
+            "id": "task-1:execution",
+            "type": "execution_verified",
+            "task_position": 1,
+            "evidence_type": "workspace_verified",
+            "artifact": "main.py",
+            "exit_code": 0,
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="unexpected",
+    ):
+        reporter._validate_claim_provenance(
+            claims,
+            task_provenance,
+            verified_facts,
+        )

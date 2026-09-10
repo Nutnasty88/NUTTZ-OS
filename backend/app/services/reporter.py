@@ -797,18 +797,6 @@ def _parse_reporter_envelope(
     }
 
 
-def _claim_mentions_restart(
-    claim_text: str,
-) -> bool:
-    return bool(
-        re.search(
-            r"\brestart(?:ed|ing|s)?\b",
-            claim_text,
-            flags=re.IGNORECASE,
-        )
-    )
-
-
 def _validate_claim_provenance(
     claims: Any,
     task_provenance: list[dict[str, Any]],
@@ -852,14 +840,21 @@ def _validate_claim_provenance(
                 "Each Reporter claim must be an object."
             )
 
-        claim_text = claim.get("text")
+        allowed_claim_fields = {
+            "kind",
+            "supported_by",
+        }
 
-        if (
-            not isinstance(claim_text, str)
-            or not claim_text.strip()
-        ):
+        unexpected_claim_fields = (
+            set(claim) - allowed_claim_fields
+        )
+
+        if unexpected_claim_fields:
             raise ValueError(
-                "Each Reporter claim requires text."
+                "Reporter claim contains unexpected fields: "
+                + ", ".join(
+                    sorted(unexpected_claim_fields)
+                )
             )
 
         claim_kind = claim.get("kind")
@@ -956,26 +951,27 @@ def _validate_claim_provenance(
                 "referenced verified fact type."
             )
 
-        if (
-            _claim_mentions_restart(claim_text)
-            and "service_restart_verified"
-            not in referenced_fact_types
-        ):
-            raise ValueError(
-                "Reporter claim mentions restart without "
-                "referencing verified restart evidence."
-            )
-
     return claims
 
 
 def _render_verified_claims(
     claims: list[dict[str, Any]],
+    verified_facts: list[dict[str, Any]],
 ) -> str:
     if not isinstance(claims, list) or not claims:
         raise ValueError(
             "Reporter requires at least one verified claim."
         )
+
+    facts_by_id = {
+        fact.get("id"): fact
+        for fact in verified_facts
+        if (
+            isinstance(fact, dict)
+            and isinstance(fact.get("id"), str)
+            and fact.get("id")
+        )
+    }
 
     lines = [
         "## Verified Results",
@@ -988,22 +984,96 @@ def _render_verified_claims(
                 "Reporter claim must be an object."
             )
 
-        claim_text = claim.get("text")
+        kind = claim.get("kind")
+        supported_by = claim.get("supported_by")
 
         if (
-            not isinstance(claim_text, str)
-            or not claim_text.strip()
+            not isinstance(kind, str)
+            or not kind.strip()
         ):
             raise ValueError(
-                "Reporter claim text must be non-empty."
+                "Reporter claim requires a kind."
             )
 
-        lines.append(
-            f"- {claim_text.strip()}"
-        )
+        if (
+            not isinstance(supported_by, list)
+            or not supported_by
+        ):
+            raise ValueError(
+                "Reporter claim requires verified support."
+            )
+
+        matching_fact = None
+
+        for reference in supported_by:
+            if not isinstance(reference, dict):
+                continue
+
+            fact_id = reference.get("fact_id")
+            fact = facts_by_id.get(fact_id)
+
+            if (
+                isinstance(fact, dict)
+                and fact.get("type") == kind
+            ):
+                matching_fact = fact
+                break
+
+        if matching_fact is None:
+            raise ValueError(
+                "Reporter claim has no matching verified fact."
+            )
+
+        if kind == "artifact_verified":
+            artifact = matching_fact.get("artifact")
+            size_bytes = matching_fact.get("size_bytes")
+
+            sentence = (
+                f"Verified artifact {artifact} "
+                f"({size_bytes} bytes)."
+            )
+
+        elif kind == "execution_verified":
+            artifact = matching_fact.get("artifact")
+            exit_code = matching_fact.get("exit_code")
+
+            sentence = (
+                f"Verified execution of {artifact} completed "
+                f"successfully with exit code {exit_code}."
+            )
+
+        elif kind == "http_check_verified":
+            method = matching_fact.get("method")
+            request_path = matching_fact.get("path")
+            status_code = matching_fact.get("status_code")
+
+            sentence = (
+                f"Verified HTTP {method} {request_path} returned "
+                f"status {status_code} with the expected JSON "
+                "response."
+            )
+
+        elif kind == "service_restart_verified":
+            restart_count = matching_fact.get("restart_count")
+
+            sentence = (
+                "The service restart was verified "
+                f"(restart count: {restart_count})."
+            )
+
+        elif kind == "service_stopped_verified":
+            sentence = (
+                "The service was verified to stop cleanly."
+            )
+
+        else:
+            raise ValueError(
+                f"Unsupported Reporter claim kind: {kind!r}."
+            )
+
+        lines.append(f"- {sentence}")
 
     return "\n".join(lines)
-
 
 
 def _compact_tasks(
@@ -1083,9 +1153,9 @@ Rules:
   claims.
 - Do not wrap the JSON in Markdown fences.
 - claims must be a JSON list of typed factual claims with verified fact references.
-- Each claim must contain exactly these semantic fields: kind, text, and supported_by.
+- Each claim must contain exactly these fields: kind and supported_by.
 - kind must exactly match the type of at least one verified_facts entry referenced by that claim.
-- text must be a concise factual statement supported by the referenced verified_facts.
+- Do not include text, summary, explanation, or any other model-authored semantic field in a claim.
 - supported_by must be a non-empty JSON list.
 - Each supported_by entry must contain fact_id referencing an exact verified_facts entry.
 - Do not reveal internal reasoning.
@@ -1104,7 +1174,6 @@ Rules:
 - Treat task_provenance as machine-derived verification metadata. Describe a task as verified only when its provenance entry has verified=true, and limit that verification claim to the listed evidence_types.
 - If no verified fact supports a limitation or unresolved item,
   do not emit a claim about it.
-- Keep claim text concise.
 - Prefer a small set of high-value verified claims over repeating every task.
 """.strip()
 
@@ -1168,7 +1237,8 @@ Rules:
         )
 
         deliverable_content = _render_verified_claims(
-            validated_claims
+            validated_claims,
+            evidence["verified_facts"],
         )
 
         claims_json = json.dumps(

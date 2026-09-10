@@ -500,10 +500,6 @@ def test_golden_9911_workspace_mission(
                         "claims": [
                             {
                                 "kind": "execution_verified",
-                                "text": (
-                                    "The SQLite task application "
-                                    "was verified successfully."
-                                ),
                                 "supported_by": [
                                     {
                                         "fact_id": (
@@ -691,8 +687,8 @@ def test_golden_9911_workspace_mission(
     assert deliverable["status"] == "Ready"
     assert deliverable["content"] == (
         "## Verified Results\n\n"
-        "- The SQLite task application was "
-        "verified successfully."
+        "- Verified execution of main.py completed "
+        "successfully with exit code 0."
     )
 
     assert lease_row is None
