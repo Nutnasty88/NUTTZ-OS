@@ -774,7 +774,6 @@ def _parse_reporter_envelope(
         )
 
     allowed_fields = {
-        "deliverable",
         "claims",
     }
     unexpected = set(envelope) - allowed_fields
@@ -785,17 +784,6 @@ def _parse_reporter_envelope(
             + ", ".join(sorted(unexpected))
         )
 
-    deliverable = envelope.get("deliverable")
-
-    if (
-        not isinstance(deliverable, str)
-        or not deliverable.strip()
-    ):
-        raise ValueError(
-            "Reporter response requires a non-empty "
-            "deliverable."
-        )
-
     claims = envelope.get("claims")
 
     if not isinstance(claims, list):
@@ -804,7 +792,6 @@ def _parse_reporter_envelope(
         )
 
     return {
-        "deliverable": deliverable,
         "claims": claims,
     }
 
@@ -1042,14 +1029,13 @@ def create_deliverable(
     system_prompt = """
 You are Reporter Agent v1 inside NUTTZ-OS.
 
-Your job is to synthesize the completed mission into a polished
-final deliverable.
+Your job is to synthesize the completed mission into concise
+evidence-backed claims for deterministic final rendering.
 
 Rules:
-- Return only one valid JSON object with exactly two fields:
-  deliverable and claims.
+- Return only one valid JSON object with exactly one field:
+  claims.
 - Do not wrap the JSON in Markdown fences.
-- deliverable must contain the finished Markdown deliverable.
 - claims must be a JSON list of factual claims with verified fact references.
 - Each claim must contain text and supported_by.
 - Each supported_by entry must contain fact_id referencing an exact verified_facts entry.
@@ -1057,11 +1043,9 @@ Rules:
 - Do not include <think> tags.
 - Use the supplied mission evidence.
 - Do not invent actions, tests, files, commands, sources, or results.
-- Clearly distinguish verified results from recommendations.
-- Organize the result with useful Markdown headings.
-- Include a brief executive summary.
-- Include only the most important findings or completed work.
-- Include verification/results when evidence exists.
+- Return only concise factual claims supported by verified_facts.
+- Include only the most important verified findings or completed work.
+- Do not include headings, summaries, conclusions, or free-form report text.
 - State limitations, risks, failures, missing capabilities, or unresolved
   items only when they are explicitly supported by the supplied mission
   evidence.
@@ -1071,9 +1055,8 @@ Rules:
 - Treat task_provenance as machine-derived verification metadata. Describe a task as verified only when its provenance entry has verified=true, and limit that verification claim to the listed evidence_types.
 - If the evidence contains no supported limitations or unresolved items,
   omit a limitations section entirely.
-- Keep the entire deliverable under 350 words.
-- Prefer concise synthesis over repeating every task.
-- End with a concise mission outcome.
+- Keep claim text concise.
+- Prefer a small set of high-value verified claims over repeating every task.
 """.strip()
 
     evidence = {

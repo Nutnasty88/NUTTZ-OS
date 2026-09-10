@@ -497,12 +497,6 @@ def test_golden_9911_workspace_mission(
             "message": {
                 "content": json.dumps(
                     {
-                        "deliverable": (
-                            "# Golden 9911 Deliverable\n\n"
-                            "The SQLite task application was "
-                            "verified successfully.\n\n"
-                            "Mission outcome: Completed."
-                        ),
                         "claims": [
                             {
                                 "text": (

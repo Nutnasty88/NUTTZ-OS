@@ -336,7 +336,6 @@ def test_claim_rejects_non_string_fact_id():
 def test_parse_reporter_envelope_accepts_valid_json():
     content = """
 {
-  "deliverable": "# Mission Report\\n\\nCompleted.",
   "claims": [
     {
       "text": "The service was verified.",
@@ -354,9 +353,6 @@ def test_parse_reporter_envelope_accepts_valid_json():
         content
     )
 
-    assert envelope["deliverable"] == (
-        "# Mission Report\n\nCompleted."
-    )
     assert len(envelope["claims"]) == 1
 
 
@@ -380,23 +376,23 @@ def test_parse_reporter_envelope_requires_object():
         )
 
 
-def test_parse_reporter_envelope_requires_deliverable():
+def test_parse_reporter_envelope_requires_claims():
     with pytest.raises(
         ValueError,
-        match="deliverable",
+        match="claims",
     ):
         reporter._parse_reporter_envelope(
-            '{"claims": []}'
+            '{}'
         )
 
 
-def test_parse_reporter_envelope_rejects_empty_deliverable():
+def test_parse_reporter_envelope_rejects_deliverable_field():
     with pytest.raises(
         ValueError,
-        match="deliverable",
+        match="unexpected fields",
     ):
         reporter._parse_reporter_envelope(
-            '{"deliverable": "   ", "claims": []}'
+            '{"deliverable": "Report", "claims": []}'
         )
 
 
@@ -406,13 +402,13 @@ def test_parse_reporter_envelope_requires_claims_list():
         match="claims",
     ):
         reporter._parse_reporter_envelope(
-            '{"deliverable": "Report", "claims": {}}'
+            '{"claims": {}}'
         )
 
 
 def test_parse_reporter_envelope_rejects_markdown_fence():
     content = """```json
-{"deliverable": "Report", "claims": []}
+{"claims": []}
 ```"""
 
     with pytest.raises(
@@ -482,4 +478,27 @@ def test_claim_rejects_duplicate_verified_fact_ids():
                 )
             ],
             duplicate_facts,
+        )
+
+
+def test_reporter_envelope_accepts_claims_only():
+    envelope = reporter._parse_reporter_envelope(
+        '{"claims": []}'
+    )
+
+    assert envelope == {
+        "claims": [],
+    }
+
+
+def test_reporter_envelope_rejects_legacy_deliverable_field():
+    with pytest.raises(
+        ValueError,
+        match="unexpected fields",
+    ):
+        reporter._parse_reporter_envelope(
+            (
+                '{"deliverable":"legacy model markdown",'
+                '"claims":[]}'
+            )
         )

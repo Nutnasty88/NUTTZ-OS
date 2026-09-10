@@ -478,12 +478,6 @@ def test_golden_9916_http_service_mission(
             "message": {
                 "content": json.dumps(
                     {
-                        "deliverable": (
-                            "# Golden 9916 HTTP Deliverable\n\n"
-                            "The FastAPI SQLite service was "
-                            "verified across restart.\n\n"
-                            "Mission outcome: Completed."
-                        ),
                         "claims": [
                             {
                                 "text": (
