@@ -446,6 +446,15 @@ def test_golden_9911_workspace_mission(
         )
 
         provenance = evidence["task_provenance"]
+        verified_facts = evidence["verified_facts"]
+
+        assert any(
+            fact["type"] == "execution_verified"
+            and fact["task_position"] == 5
+            and fact["evidence_type"] == "workspace_verified"
+            and fact["exit_code"] == 0
+            for fact in verified_facts
+        )
 
         assert [
             item["evidence_types"]
@@ -502,9 +511,8 @@ def test_golden_9911_workspace_mission(
                                 ),
                                 "supported_by": [
                                     {
-                                        "task_position": 5,
-                                        "evidence_type": (
-                                            "workspace_verified"
+                                        "fact_id": (
+                                            "task-5:execution"
                                         ),
                                     }
                                 ],

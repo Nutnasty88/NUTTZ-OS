@@ -409,6 +409,32 @@ def test_golden_9916_http_service_mission(
         )
 
         provenance = evidence["task_provenance"]
+        verified_facts = evidence["verified_facts"]
+
+        task6_facts = [
+            fact
+            for fact in verified_facts
+            if fact["task_position"] == 6
+        ]
+
+        assert any(
+            fact["type"] == "service_restart_verified"
+            and fact["restart_count"] == 1
+            for fact in task6_facts
+        )
+
+        assert any(
+            fact["type"] == "http_check_verified"
+            and fact["method"] == "GET"
+            and fact["path"] == "/tasks"
+            and fact["restart_before"] is True
+            for fact in task6_facts
+        )
+
+        assert any(
+            fact["type"] == "service_stopped_verified"
+            for fact in task6_facts
+        )
 
         assert [
             item["evidence_types"]
@@ -466,9 +492,8 @@ def test_golden_9916_http_service_mission(
                                 ),
                                 "supported_by": [
                                     {
-                                        "task_position": 6,
-                                        "evidence_type": (
-                                            "http_service_verified"
+                                        "fact_id": (
+                                            "task-6:http-check:1"
                                         ),
                                     }
                                 ],

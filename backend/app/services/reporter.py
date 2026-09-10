@@ -195,6 +195,459 @@ def _compact_text(
     return text[:limit].rstrip() + "\n...[truncated]"
 
 
+def _parsed_verified_evidence(
+    result: str,
+    *,
+    header: str,
+    evidence_marker: str,
+    require_service_stopped: bool = False,
+) -> dict[str, Any] | None:
+    if not result.startswith(header + "\n"):
+        return None
+
+    marker = evidence_marker + "\n"
+
+    if marker not in result:
+        return None
+
+    evidence_text = result.split(marker, 1)[1]
+    decoder = json.JSONDecoder()
+
+    try:
+        evidence, _ = decoder.raw_decode(
+            evidence_text.lstrip()
+        )
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    if not isinstance(evidence, dict):
+        return None
+
+    if evidence.get("verified") is not True:
+        return None
+
+    if (
+        require_service_stopped
+        and evidence.get("service_stopped") is not True
+    ):
+        return None
+
+    return evidence
+
+
+def _is_non_bool_int(value: Any) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+    )
+
+
+def _is_sha256(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+
+    if len(value) != 64:
+        return False
+
+    return all(
+        char in "0123456789abcdefABCDEF"
+        for char in value
+    )
+
+
+def _valid_artifact_identity(
+    artifact: Any,
+    sha256: Any,
+    size_bytes: Any,
+) -> bool:
+    return (
+        isinstance(artifact, str)
+        and bool(artifact.strip())
+        and _is_sha256(sha256)
+        and _is_non_bool_int(size_bytes)
+        and size_bytes >= 0
+    )
+
+
+def _task_verified_facts(
+    task: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if task.get("status") != "Completed":
+        return []
+
+    result = task.get("result", "") or ""
+    position = task.get("position")
+    facts: list[dict[str, Any]] = []
+
+    builder = _parsed_verified_evidence(
+        result,
+        header="BUILDER AGENT: COMPLETED",
+        evidence_marker="VERIFIED BUILDER EVIDENCE:",
+    )
+
+    if builder is not None:
+        artifact = builder.get("entrypoint")
+        sha256 = builder.get("entrypoint_sha256")
+        size_bytes = builder.get(
+            "entrypoint_size_bytes"
+        )
+
+        if _valid_artifact_identity(
+            artifact,
+            sha256,
+            size_bytes,
+        ):
+            facts.append(
+                {
+                    "id": f"task-{position}:artifact",
+                    "type": "artifact_verified",
+                    "task_position": position,
+                    "evidence_type": "builder_verified",
+                    "artifact": artifact,
+                    "sha256": sha256,
+                    "size_bytes": size_bytes,
+                }
+            )
+
+    workspace = _parsed_verified_evidence(
+        result,
+        header="WORKSPACE EXECUTION: VERIFIED",
+        evidence_marker="VERIFIED EXECUTION EVIDENCE:",
+    )
+
+    if workspace is not None:
+        artifact = workspace.get("artifact")
+        sha256 = workspace.get("artifact_sha256")
+        size_bytes = workspace.get(
+            "artifact_size_bytes"
+        )
+        exit_code = workspace.get("exit_code")
+        status = workspace.get("status")
+
+        single_execution_verified = (
+            workspace.get("type")
+            == "builder_workspace_execution"
+            and _valid_artifact_identity(
+                artifact,
+                sha256,
+                size_bytes,
+            )
+            and status == "success"
+            and _is_non_bool_int(exit_code)
+            and exit_code == 0
+        )
+
+        sequence_execution_verified = False
+
+        steps = workspace.get("steps")
+        step_count = workspace.get("step_count")
+        requested_step_count = workspace.get(
+            "requested_step_count"
+        )
+
+        if (
+            isinstance(steps, list)
+            and steps
+            and _is_non_bool_int(step_count)
+            and _is_non_bool_int(requested_step_count)
+            and step_count == len(steps)
+            and requested_step_count == len(steps)
+            and _valid_artifact_identity(
+                artifact,
+                sha256,
+                size_bytes,
+            )
+            and _is_non_bool_int(exit_code)
+            and exit_code == 0
+        ):
+            valid_sequence_steps = True
+
+            for step in steps:
+                if not isinstance(step, dict):
+                    valid_sequence_steps = False
+                    break
+
+                if (
+                    step.get("type")
+                    != "builder_workspace_execution"
+                    or step.get("verified") is not True
+                    or step.get("status") != "success"
+                    or not _is_non_bool_int(
+                        step.get("exit_code")
+                    )
+                    or step.get("exit_code") != 0
+                    or not _valid_artifact_identity(
+                        step.get("artifact"),
+                        step.get("artifact_sha256"),
+                        step.get(
+                            "artifact_size_bytes"
+                        ),
+                    )
+                    or step.get("artifact") != artifact
+                    or step.get(
+                        "artifact_sha256"
+                    ) != sha256
+                    or step.get(
+                        "artifact_size_bytes"
+                    ) != size_bytes
+                ):
+                    valid_sequence_steps = False
+                    break
+
+            sequence_execution_verified = (
+                valid_sequence_steps
+            )
+
+        if (
+            single_execution_verified
+            or sequence_execution_verified
+        ):
+            facts.append(
+                {
+                    "id": f"task-{position}:execution",
+                    "type": "execution_verified",
+                    "task_position": position,
+                    "evidence_type": "workspace_verified",
+                    "artifact": artifact,
+                    "sha256": sha256,
+                    "size_bytes": size_bytes,
+                    "exit_code": exit_code,
+                    "stdout": workspace.get(
+                        "stdout",
+                        "",
+                    ),
+                }
+            )
+
+    http = _parsed_verified_evidence(
+        result,
+        header="HTTP SERVICE EXECUTION: VERIFIED",
+        evidence_marker=(
+            "VERIFIED HTTP SERVICE EVIDENCE:"
+        ),
+        require_service_stopped=True,
+    )
+
+    if http is not None:
+        artifact = http.get("artifact")
+        sha256 = http.get("artifact_sha256")
+        size_bytes = http.get(
+            "artifact_size_bytes"
+        )
+        requested_check_count = http.get(
+            "requested_check_count"
+        )
+        check_count = http.get("check_count")
+        restart_count = http.get("restart_count")
+        steps = http.get("steps")
+
+        http_structure_verified = (
+            http.get("type")
+            == "builder_workspace_http_service"
+            and _valid_artifact_identity(
+                artifact,
+                sha256,
+                size_bytes,
+            )
+            and isinstance(steps, list)
+            and _is_non_bool_int(
+                requested_check_count
+            )
+            and requested_check_count >= 0
+            and _is_non_bool_int(check_count)
+            and check_count >= 0
+            and requested_check_count
+            == check_count
+            == len(steps)
+            and _is_non_bool_int(restart_count)
+            and restart_count >= 0
+        )
+
+        valid_steps: list[dict[str, Any]] = []
+        indexes: set[int] = set()
+
+        if http_structure_verified:
+            for step in steps:
+                if not isinstance(step, dict):
+                    http_structure_verified = False
+                    break
+
+                index = step.get("index")
+                method = step.get("method")
+                request_path = step.get("path")
+                status_code = step.get(
+                    "status_code"
+                )
+                expected_status = step.get(
+                    "expected_status"
+                )
+                restart_before = step.get(
+                    "restart_before"
+                )
+
+                if step.get("verified") is not True:
+                    http_structure_verified = False
+                    break
+
+                if (
+                    not _is_non_bool_int(index)
+                    or index <= 0
+                    or index in indexes
+                ):
+                    http_structure_verified = False
+                    break
+
+                if method not in {"GET", "POST"}:
+                    http_structure_verified = False
+                    break
+
+                if (
+                    not isinstance(
+                        request_path,
+                        str,
+                    )
+                    or not request_path.startswith("/")
+                ):
+                    http_structure_verified = False
+                    break
+
+                if (
+                    not _is_non_bool_int(
+                        status_code
+                    )
+                    or not _is_non_bool_int(
+                        expected_status
+                    )
+                    or status_code
+                    != expected_status
+                ):
+                    http_structure_verified = False
+                    break
+
+                if not isinstance(
+                    restart_before,
+                    bool,
+                ):
+                    http_structure_verified = False
+                    break
+
+                expected_json = step.get(
+                    "expected_json"
+                )
+
+                if (
+                    expected_json is not None
+                    and step.get("response_json")
+                    != expected_json
+                ):
+                    http_structure_verified = False
+                    break
+
+                indexes.add(index)
+                valid_steps.append(step)
+
+        if (
+            http_structure_verified
+            and indexes
+            != set(
+                range(
+                    1,
+                    len(steps) + 1,
+                )
+            )
+        ):
+            http_structure_verified = False
+
+        actual_restart_count = sum(
+            1
+            for step in valid_steps
+            if step.get("restart_before") is True
+        )
+
+        if (
+            http_structure_verified
+            and restart_count
+            != actual_restart_count
+        ):
+            http_structure_verified = False
+
+        if http_structure_verified:
+            for step in valid_steps:
+                facts.append(
+                    {
+                        "id": (
+                            f"task-{position}:"
+                            f"http-check:{step['index']}"
+                        ),
+                        "type": (
+                            "http_check_verified"
+                        ),
+                        "task_position": position,
+                        "evidence_type": (
+                            "http_service_verified"
+                        ),
+                        "check_index": step["index"],
+                        "method": step["method"],
+                        "path": step["path"],
+                        "status_code": (
+                            step["status_code"]
+                        ),
+                        "expected_status": (
+                            step["expected_status"]
+                        ),
+                        "response_json": step.get(
+                            "response_json"
+                        ),
+                        "expected_json": step.get(
+                            "expected_json"
+                        ),
+                        "restart_before": (
+                            step["restart_before"]
+                        ),
+                    }
+                )
+
+            if restart_count > 0:
+                facts.append(
+                    {
+                        "id": (
+                            f"task-{position}:"
+                            "service-restart"
+                        ),
+                        "type": (
+                            "service_restart_verified"
+                        ),
+                        "task_position": position,
+                        "evidence_type": (
+                            "http_service_verified"
+                        ),
+                        "restart_count": (
+                            restart_count
+                        ),
+                    }
+                )
+
+            facts.append(
+                {
+                    "id": (
+                        f"task-{position}:"
+                        "service-stopped"
+                    ),
+                    "type": (
+                        "service_stopped_verified"
+                    ),
+                    "task_position": position,
+                    "evidence_type": (
+                        "http_service_verified"
+                    ),
+                }
+            )
+
+    return facts
+
+
+
+
 def _verified_evidence_block(
     result: str,
     *,
@@ -290,6 +743,19 @@ def _task_provenance_map(
     ]
 
 
+def _verified_facts_map(
+    tasks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+
+    for task in tasks:
+        facts.extend(
+            _task_verified_facts(task)
+        )
+
+    return facts
+
+
 
 
 def _parse_reporter_envelope(
@@ -346,6 +812,7 @@ def _parse_reporter_envelope(
 def _validate_claim_provenance(
     claims: Any,
     task_provenance: list[dict[str, Any]],
+    verified_facts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     if not isinstance(claims, list):
         raise ValueError(
@@ -357,17 +824,39 @@ def _validate_claim_provenance(
         for item in task_provenance
     }
 
+    facts_by_id: dict[str, dict[str, Any]] = {}
+
+    for fact in verified_facts:
+        if not isinstance(fact, dict):
+            continue
+
+        fact_id = fact.get("id")
+
+        if (
+            not isinstance(fact_id, str)
+            or not fact_id.strip()
+        ):
+            continue
+
+        if fact_id in facts_by_id:
+            raise ValueError(
+                "Reporter verified facts contain duplicate "
+                f"verified fact id {fact_id!r}."
+            )
+
+        facts_by_id[fact_id] = fact
+
     for claim in claims:
         if not isinstance(claim, dict):
             raise ValueError(
                 "Each Reporter claim must be an object."
             )
 
-        text = claim.get("text")
+        claim_text = claim.get("text")
 
         if (
-            not isinstance(text, str)
-            or not text.strip()
+            not isinstance(claim_text, str)
+            or not claim_text.strip()
         ):
             raise ValueError(
                 "Each Reporter claim requires text."
@@ -391,50 +880,45 @@ def _validate_claim_provenance(
                     "be an object."
                 )
 
-            position = reference.get(
-                "task_position"
-            )
-            evidence_type = reference.get(
-                "evidence_type"
-            )
+            fact_id = reference.get("fact_id")
 
             if (
-                not isinstance(position, int)
-                or isinstance(position, bool)
+                not isinstance(fact_id, str)
+                or not fact_id.strip()
             ):
                 raise ValueError(
-                    "Claim provenance task_position "
-                    "must be an integer."
+                    "Claim provenance fact_id must be "
+                    "a non-empty string."
                 )
 
-            if (
-                not isinstance(evidence_type, str)
-                or not evidence_type.strip()
-            ):
+            fact = facts_by_id.get(fact_id)
+
+            if fact is None:
                 raise ValueError(
-                    "Claim provenance evidence_type "
-                    "must be a non-empty string."
+                    "Claim references unknown verified fact "
+                    f"{fact_id!r}."
                 )
 
-            task = provenance_by_position.get(
-                position
-            )
+            position = fact.get("task_position")
+            evidence_type = fact.get("evidence_type")
+
+            task = provenance_by_position.get(position)
 
             if task is None:
                 raise ValueError(
-                    "Claim references unknown task position "
+                    "Claim fact references unknown task position "
                     f"{position!r}."
                 )
 
             if task.get("status") != "Completed":
                 raise ValueError(
-                    "Claim references task that is "
+                    "Claim fact references task that is "
                     "not completed."
                 )
 
             if task.get("verified") is not True:
                 raise ValueError(
-                    "Claim references task that is "
+                    "Claim fact references task that is "
                     "not verified."
                 )
 
@@ -445,12 +929,11 @@ def _validate_claim_provenance(
 
             if evidence_type not in evidence_types:
                 raise ValueError(
-                    "Claim references evidence type "
+                    "Claim fact references evidence type "
                     "not verified for task."
                 )
 
     return claims
-
 
 def _compact_tasks(
     tasks: list[dict[str, Any]],
@@ -529,9 +1012,9 @@ Rules:
   deliverable and claims.
 - Do not wrap the JSON in Markdown fences.
 - deliverable must contain the finished Markdown deliverable.
-- claims must be a JSON list of verified factual claims.
+- claims must be a JSON list of factual claims with verified fact references.
 - Each claim must contain text and supported_by.
-- Each supported_by entry must contain task_position and evidence_type.
+- Each supported_by entry must contain fact_id referencing an exact verified_facts entry.
 - Do not reveal internal reasoning.
 - Do not include <think> tags.
 - Use the supplied mission evidence.
@@ -568,6 +1051,7 @@ Rules:
         "research": _compact_text(research, 1200),
         "tasks": _compact_tasks(tasks),
         "task_provenance": _task_provenance_map(tasks),
+        "verified_facts": _verified_facts_map(tasks),
     }
 
     user_prompt = (
@@ -610,6 +1094,7 @@ Rules:
         _validate_claim_provenance(
             envelope["claims"],
             evidence["task_provenance"],
+            evidence["verified_facts"],
         )
         deliverable_content = envelope[
             "deliverable"
