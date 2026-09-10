@@ -486,11 +486,6 @@ def test_golden_9916_http_service_mission(
                                             "fact_id": (
                                                 "task-6:service-restart"
                                             ),
-                                        },
-                                        {
-                                            "fact_id": (
-                                                "task-6:http-check:1"
-                                            ),
                                         }
                                 ],
                             }

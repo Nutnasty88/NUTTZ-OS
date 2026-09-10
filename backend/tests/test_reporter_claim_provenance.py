@@ -245,7 +245,7 @@ def test_claim_rejects_empty_support():
 
     with pytest.raises(
         ValueError,
-        match="at least one",
+        match="exactly one",
     ):
         reporter._validate_claim_provenance(
             claims,
@@ -492,9 +492,6 @@ def test_claim_accepts_restart_claim_with_restart_fact():
             "supported_by": [
                 {
                     "fact_id": "task-6:service-restart",
-                },
-                {
-                    "fact_id": "task-6:http-check:1",
                 },
             ],
         }
@@ -819,6 +816,66 @@ def test_selector_claim_rejects_unknown_semantic_field():
     with pytest.raises(
         ValueError,
         match="unexpected",
+    ):
+        reporter._validate_claim_provenance(
+            claims,
+            task_provenance,
+            verified_facts,
+        )
+
+
+def test_selector_claim_rejects_multiple_fact_references():
+    claims = [
+        {
+            "kind": "execution_verified",
+            "supported_by": [
+                {
+                    "fact_id": "task-1:execution",
+                },
+                {
+                    "fact_id": "task-2:execution",
+                },
+            ],
+        }
+    ]
+
+    task_provenance = [
+        {
+            "position": 1,
+            "status": "Completed",
+            "verified": True,
+            "evidence_types": [
+                "workspace_verified",
+            ],
+        },
+        {
+            "position": 2,
+            "status": "Completed",
+            "verified": True,
+            "evidence_types": [
+                "workspace_verified",
+            ],
+        },
+    ]
+
+    verified_facts = [
+        {
+            "id": "task-1:execution",
+            "type": "execution_verified",
+            "task_position": 1,
+            "evidence_type": "workspace_verified",
+        },
+        {
+            "id": "task-2:execution",
+            "type": "execution_verified",
+            "task_position": 2,
+            "evidence_type": "workspace_verified",
+        },
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="exactly one",
     ):
         reporter._validate_claim_provenance(
             claims,

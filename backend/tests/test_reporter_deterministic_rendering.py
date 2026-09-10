@@ -415,3 +415,38 @@ def test_render_service_stopped_does_not_claim_clean_shutdown():
     )
 
     assert "cleanly" not in rendered
+
+
+def test_render_rejects_multiple_fact_references():
+    claims = [
+        {
+            "kind": "execution_verified",
+            "supported_by": [
+                {
+                    "fact_id": "task-1:execution",
+                },
+                {
+                    "fact_id": "task-2:execution",
+                },
+            ],
+        }
+    ]
+
+    first = execution_fact(
+        fact_id="task-1:execution",
+        artifact="first.py",
+    )
+
+    second = execution_fact(
+        fact_id="task-2:execution",
+        artifact="second.py",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="exactly one",
+    ):
+        reporter._render_verified_claims(
+            claims,
+            [first, second],
+        )

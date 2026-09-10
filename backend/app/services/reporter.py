@@ -871,10 +871,10 @@ def _validate_claim_provenance(
 
         if (
             not isinstance(supported_by, list)
-            or not supported_by
+            or len(supported_by) != 1
         ):
             raise ValueError(
-                "Each Reporter claim requires at least one "
+                "Each Reporter claim requires exactly one "
                 "provenance reference."
             )
 
@@ -997,29 +997,27 @@ def _render_verified_claims(
 
         if (
             not isinstance(supported_by, list)
-            or not supported_by
+            or len(supported_by) != 1
         ):
             raise ValueError(
-                "Reporter claim requires verified support."
+                "Reporter claim requires exactly one "
+                "verified support reference."
             )
 
-        matching_fact = None
+        reference = supported_by[0]
 
-        for reference in supported_by:
-            if not isinstance(reference, dict):
-                continue
+        if not isinstance(reference, dict):
+            raise ValueError(
+                "Reporter claim support reference must be an object."
+            )
 
-            fact_id = reference.get("fact_id")
-            fact = facts_by_id.get(fact_id)
+        fact_id = reference.get("fact_id")
+        matching_fact = facts_by_id.get(fact_id)
 
-            if (
-                isinstance(fact, dict)
-                and fact.get("type") == kind
-            ):
-                matching_fact = fact
-                break
-
-        if matching_fact is None:
+        if (
+            not isinstance(matching_fact, dict)
+            or matching_fact.get("type") != kind
+        ):
             raise ValueError(
                 "Reporter claim has no matching verified fact."
             )
@@ -1164,8 +1162,8 @@ Rules:
 - Each claim must contain exactly these fields: kind and supported_by.
 - kind must exactly match the type of at least one verified_facts entry referenced by that claim.
 - Do not include text, summary, explanation, or any other model-authored semantic field in a claim.
-- supported_by must be a non-empty JSON list.
-- Each supported_by entry must contain fact_id referencing an exact verified_facts entry.
+- supported_by must be a JSON list containing exactly one entry.
+- That supported_by entry must contain fact_id referencing one exact verified_facts entry.
 - Do not reveal internal reasoning.
 - Do not include <think> tags.
 - Use the supplied mission evidence.
