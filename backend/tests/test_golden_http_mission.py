@@ -486,10 +486,15 @@ def test_golden_9916_http_service_mission(
                                 ),
                                 "supported_by": [
                                     {
-                                        "fact_id": (
-                                            "task-6:http-check:1"
-                                        ),
-                                    }
+                                            "fact_id": (
+                                                "task-6:service-restart"
+                                            ),
+                                        },
+                                        {
+                                            "fact_id": (
+                                                "task-6:http-check:1"
+                                            ),
+                                        }
                                 ],
                             }
                         ],

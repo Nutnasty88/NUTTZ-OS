@@ -502,3 +502,255 @@ def test_reporter_envelope_rejects_legacy_deliverable_field():
                 '"claims":[]}'
             )
         )
+
+
+def test_claim_rejects_restart_claim_without_restart_fact():
+    claims = [
+        {
+            "text": (
+                "The service was verified across restart."
+            ),
+            "supported_by": [
+                {
+                    "fact_id": "task-6:http-check:1",
+                }
+            ],
+        }
+    ]
+
+    task_provenance = [
+        {
+            "position": 6,
+            "status": "Completed",
+            "evidence_types": [
+                "http_service_verified",
+            ],
+            "verified": True,
+        }
+    ]
+
+    verified_facts = [
+        {
+            "id": "task-6:http-check:1",
+            "type": "http_check_verified",
+            "task_position": 6,
+            "evidence_type": "http_service_verified",
+            "check_index": 1,
+            "method": "GET",
+            "path": "/tasks",
+            "status_code": 200,
+            "expected_status": 200,
+            "response_json": [
+                {
+                    "title": "Buy milk",
+                }
+            ],
+            "expected_json": [
+                {
+                    "title": "Buy milk",
+                }
+            ],
+            "restart_before": False,
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="restart",
+    ):
+        reporter._validate_claim_provenance(
+            claims,
+            task_provenance,
+            verified_facts,
+        )
+
+
+def test_claim_accepts_restart_claim_with_restart_fact():
+    claims = [
+        {
+            "text": (
+                "The service was verified across restart."
+            ),
+            "supported_by": [
+                {
+                    "fact_id": "task-6:service-restart",
+                },
+                {
+                    "fact_id": "task-6:http-check:1",
+                },
+            ],
+        }
+    ]
+
+    task_provenance = [
+        {
+            "position": 6,
+            "status": "Completed",
+            "evidence_types": [
+                "http_service_verified",
+            ],
+            "verified": True,
+        }
+    ]
+
+    verified_facts = [
+        {
+            "id": "task-6:service-restart",
+            "type": "service_restart_verified",
+            "task_position": 6,
+            "evidence_type": "http_service_verified",
+            "restart_count": 1,
+        },
+        {
+            "id": "task-6:http-check:1",
+            "type": "http_check_verified",
+            "task_position": 6,
+            "evidence_type": "http_service_verified",
+            "check_index": 1,
+            "method": "GET",
+            "path": "/tasks",
+            "status_code": 200,
+            "expected_status": 200,
+            "response_json": [
+                {
+                    "title": "Buy milk",
+                }
+            ],
+            "expected_json": [
+                {
+                    "title": "Buy milk",
+                }
+            ],
+            "restart_before": True,
+        },
+    ]
+
+    validated = reporter._validate_claim_provenance(
+        claims,
+        task_provenance,
+        verified_facts,
+    )
+
+    assert validated == claims
+
+
+@pytest.mark.parametrize(
+    "claim_text",
+    [
+        "The service was verified across restart.",
+        "The service restarted successfully.",
+        "The service is restarting.",
+        "The service restarts cleanly.",
+        "RESTART verification succeeded.",
+    ],
+)
+def test_restart_language_requires_restart_fact(
+    claim_text,
+):
+    claims = [
+        {
+            "text": claim_text,
+            "supported_by": [
+                {
+                    "fact_id": "task-6:http-check:1",
+                }
+            ],
+        }
+    ]
+
+    task_provenance = [
+        {
+            "position": 6,
+            "status": "Completed",
+            "evidence_types": [
+                "http_service_verified",
+            ],
+            "verified": True,
+        }
+    ]
+
+    verified_facts = [
+        {
+            "id": "task-6:http-check:1",
+            "type": "http_check_verified",
+            "task_position": 6,
+            "evidence_type": "http_service_verified",
+            "check_index": 1,
+            "method": "GET",
+            "path": "/tasks",
+            "status_code": 200,
+            "expected_status": 200,
+            "response_json": [],
+            "expected_json": [],
+            "restart_before": False,
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="restart",
+    ):
+        reporter._validate_claim_provenance(
+            claims,
+            task_provenance,
+            verified_facts,
+        )
+
+
+@pytest.mark.parametrize(
+    "claim_text",
+    [
+        "The service returned HTTP 200.",
+        "The restartable configuration was generated.",
+        "The prerestartcheck artifact exists.",
+    ],
+)
+def test_non_restart_language_does_not_require_restart_fact(
+    claim_text,
+):
+    claims = [
+        {
+            "text": claim_text,
+            "supported_by": [
+                {
+                    "fact_id": "task-6:http-check:1",
+                }
+            ],
+        }
+    ]
+
+    task_provenance = [
+        {
+            "position": 6,
+            "status": "Completed",
+            "evidence_types": [
+                "http_service_verified",
+            ],
+            "verified": True,
+        }
+    ]
+
+    verified_facts = [
+        {
+            "id": "task-6:http-check:1",
+            "type": "http_check_verified",
+            "task_position": 6,
+            "evidence_type": "http_service_verified",
+            "check_index": 1,
+            "method": "GET",
+            "path": "/tasks",
+            "status_code": 200,
+            "expected_status": 200,
+            "response_json": [],
+            "expected_json": [],
+            "restart_before": False,
+        }
+    ]
+
+    validated = reporter._validate_claim_provenance(
+        claims,
+        task_provenance,
+        verified_facts,
+    )
+
+    assert validated == claims

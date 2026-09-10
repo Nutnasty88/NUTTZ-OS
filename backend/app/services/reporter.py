@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any
 
 from app.database.database import get_connection
@@ -796,6 +797,18 @@ def _parse_reporter_envelope(
     }
 
 
+def _claim_mentions_restart(
+    claim_text: str,
+) -> bool:
+    return bool(
+        re.search(
+            r"\brestart(?:ed|ing|s)?\b",
+            claim_text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
 def _validate_claim_provenance(
     claims: Any,
     task_provenance: list[dict[str, Any]],
@@ -860,6 +873,8 @@ def _validate_claim_provenance(
                 "provenance reference."
             )
 
+        referenced_fact_types: set[str] = set()
+
         for reference in supported_by:
             if not isinstance(reference, dict):
                 raise ValueError(
@@ -885,6 +900,11 @@ def _validate_claim_provenance(
                     "Claim references unknown verified fact "
                     f"{fact_id!r}."
                 )
+
+            fact_type = fact.get("type")
+
+            if isinstance(fact_type, str):
+                referenced_fact_types.add(fact_type)
 
             position = fact.get("task_position")
             evidence_type = fact.get("evidence_type")
@@ -919,6 +939,16 @@ def _validate_claim_provenance(
                     "Claim fact references evidence type "
                     "not verified for task."
                 )
+
+        if (
+            _claim_mentions_restart(claim_text)
+            and "service_restart_verified"
+            not in referenced_fact_types
+        ):
+            raise ValueError(
+                "Reporter claim mentions restart without "
+                "referencing verified restart evidence."
+            )
 
     return claims
 
