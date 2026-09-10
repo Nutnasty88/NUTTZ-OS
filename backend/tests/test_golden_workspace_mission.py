@@ -487,7 +487,7 @@ def test_golden_9911_workspace_mission(
             in messages[0]["content"]
         )
         assert (
-            "omit a limitations section entirely"
+            "do not emit a claim about it"
             in messages[0]["content"]
         )
         assert "Buy milk" in user_prompt
@@ -499,6 +499,7 @@ def test_golden_9911_workspace_mission(
                     {
                         "claims": [
                             {
+                                "kind": "execution_verified",
                                 "text": (
                                     "The SQLite task application "
                                     "was verified successfully."

@@ -468,7 +468,7 @@ def test_golden_9916_http_service_mission(
             in messages[0]["content"]
         )
         assert (
-            "omit a limitations section entirely"
+            "do not emit a claim about it"
             in messages[0]["content"]
         )
         assert "Buy milk" in user_prompt
@@ -480,6 +480,7 @@ def test_golden_9916_http_service_mission(
                     {
                         "claims": [
                             {
+                                "kind": "service_restart_verified",
                                 "text": (
                                     "The FastAPI SQLite service "
                                     "was verified across restart."

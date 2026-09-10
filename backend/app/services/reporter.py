@@ -862,6 +862,16 @@ def _validate_claim_provenance(
                 "Each Reporter claim requires text."
             )
 
+        claim_kind = claim.get("kind")
+
+        if (
+            not isinstance(claim_kind, str)
+            or not claim_kind.strip()
+        ):
+            raise ValueError(
+                "Each Reporter claim requires a kind."
+            )
+
         supported_by = claim.get("supported_by")
 
         if (
@@ -939,6 +949,12 @@ def _validate_claim_provenance(
                     "Claim fact references evidence type "
                     "not verified for task."
                 )
+
+        if claim_kind not in referenced_fact_types:
+            raise ValueError(
+                "Reporter claim kind does not match any "
+                "referenced verified fact type."
+            )
 
         if (
             _claim_mentions_restart(claim_text)
@@ -1066,8 +1082,11 @@ Rules:
 - Return only one valid JSON object with exactly one field:
   claims.
 - Do not wrap the JSON in Markdown fences.
-- claims must be a JSON list of factual claims with verified fact references.
-- Each claim must contain text and supported_by.
+- claims must be a JSON list of typed factual claims with verified fact references.
+- Each claim must contain exactly these semantic fields: kind, text, and supported_by.
+- kind must exactly match the type of at least one verified_facts entry referenced by that claim.
+- text must be a concise factual statement supported by the referenced verified_facts.
+- supported_by must be a non-empty JSON list.
 - Each supported_by entry must contain fact_id referencing an exact verified_facts entry.
 - Do not reveal internal reasoning.
 - Do not include <think> tags.
@@ -1083,8 +1102,8 @@ Rules:
   implementation detail is not mentioned in the evidence.
 - Do not contradict verified mission evidence with speculative caveats.
 - Treat task_provenance as machine-derived verification metadata. Describe a task as verified only when its provenance entry has verified=true, and limit that verification claim to the listed evidence_types.
-- If the evidence contains no supported limitations or unresolved items,
-  omit a limitations section entirely.
+- If no verified fact supports a limitation or unresolved item,
+  do not emit a claim about it.
 - Keep claim text concise.
 - Prefer a small set of high-value verified claims over repeating every task.
 """.strip()
