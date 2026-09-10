@@ -327,7 +327,8 @@ def test_render_typed_service_stopped_from_verified_fact():
 
     assert rendered == (
         "## Verified Results\n\n"
-        "- The service was verified to stop cleanly."
+        "- The managed service was verified stopped "
+        "after execution."
     )
 
 
@@ -395,3 +396,22 @@ def test_render_http_expected_json_keeps_json_verification_claim():
         "- Verified HTTP GET /tasks returned status 200 "
         "with the expected JSON response."
     )
+
+
+def test_render_service_stopped_does_not_claim_clean_shutdown():
+    rendered = reporter._render_verified_claims(
+        [
+            claim(
+                "service_stopped_verified",
+                "task-6:service-stopped",
+            )
+        ],
+        [stopped_fact()],
+    )
+
+    assert rendered == (
+        "## Verified Results\n\n"
+        "- The managed service was verified stopped after execution."
+    )
+
+    assert "cleanly" not in rendered

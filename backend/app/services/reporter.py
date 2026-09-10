@@ -1070,7 +1070,8 @@ def _render_verified_claims(
 
         elif kind == "service_stopped_verified":
             sentence = (
-                "The service was verified to stop cleanly."
+                "The managed service was verified stopped "
+                "after execution."
             )
 
         else:
