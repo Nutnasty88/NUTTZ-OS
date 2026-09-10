@@ -1046,12 +1046,19 @@ def _render_verified_claims(
             method = matching_fact.get("method")
             request_path = matching_fact.get("path")
             status_code = matching_fact.get("status_code")
+            expected_json = matching_fact.get("expected_json")
 
-            sentence = (
-                f"Verified HTTP {method} {request_path} returned "
-                f"status {status_code} with the expected JSON "
-                "response."
-            )
+            if expected_json is None:
+                sentence = (
+                    f"Verified HTTP {method} {request_path} returned "
+                    f"status {status_code}."
+                )
+            else:
+                sentence = (
+                    f"Verified HTTP {method} {request_path} returned "
+                    f"status {status_code} with the expected JSON "
+                    "response."
+                )
 
         elif kind == "service_restart_verified":
             restart_count = matching_fact.get("restart_count")

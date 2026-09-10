@@ -347,3 +347,51 @@ def test_render_rejects_kind_without_matching_fact():
             claims,
             [http_fact()],
         )
+
+
+def test_render_http_status_only_does_not_claim_json_verification():
+    fact = http_fact(
+        fact_id="task-3:http-check:2",
+    )
+    fact["path"] = "/health"
+    fact["response_json"] = {
+        "status": "healthy",
+    }
+    fact["expected_json"] = None
+
+    rendered = reporter._render_verified_claims(
+        [
+            claim(
+                "http_check_verified",
+                "task-3:http-check:2",
+            )
+        ],
+        [fact],
+    )
+
+    assert rendered == (
+        "## Verified Results\n\n"
+        "- Verified HTTP GET /health returned status 200."
+    )
+
+    assert "expected JSON" not in rendered
+
+
+def test_render_http_expected_json_keeps_json_verification_claim():
+    fact = http_fact()
+
+    rendered = reporter._render_verified_claims(
+        [
+            claim(
+                "http_check_verified",
+                "task-3:http-check:1",
+            )
+        ],
+        [fact],
+    )
+
+    assert rendered == (
+        "## Verified Results\n\n"
+        "- Verified HTTP GET /tasks returned status 200 "
+        "with the expected JSON response."
+    )
