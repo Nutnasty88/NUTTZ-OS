@@ -694,14 +694,10 @@ def test_golden_9911_workspace_mission(
 
     assert deliverable["model"] == reporter.REPORTER_MODEL
     assert deliverable["status"] == "Ready"
-    assert (
-        deliverable["content"]
-        == (
-            "# Golden 9911 Deliverable\n\n"
-            "The SQLite task application was "
-            "verified successfully.\n\n"
-            "Mission outcome: Completed."
-        )
+    assert deliverable["content"] == (
+        "## Verified Results\n\n"
+        "- The SQLite task application was "
+        "verified successfully."
     )
 
     assert lease_row is None

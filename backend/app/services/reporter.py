@@ -935,6 +935,44 @@ def _validate_claim_provenance(
 
     return claims
 
+
+def _render_verified_claims(
+    claims: list[dict[str, Any]],
+) -> str:
+    if not isinstance(claims, list) or not claims:
+        raise ValueError(
+            "Reporter requires at least one verified claim."
+        )
+
+    lines = [
+        "## Verified Results",
+        "",
+    ]
+
+    for claim in claims:
+        if not isinstance(claim, dict):
+            raise ValueError(
+                "Reporter claim must be an object."
+            )
+
+        claim_text = claim.get("text")
+
+        if (
+            not isinstance(claim_text, str)
+            or not claim_text.strip()
+        ):
+            raise ValueError(
+                "Reporter claim text must be non-empty."
+            )
+
+        lines.append(
+            f"- {claim_text.strip()}"
+        )
+
+    return "\n".join(lines)
+
+
+
 def _compact_tasks(
     tasks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1091,16 +1129,18 @@ Rules:
         envelope = _parse_reporter_envelope(
             content
         )
-        _validate_claim_provenance(
+        validated_claims = _validate_claim_provenance(
             envelope["claims"],
             evidence["task_provenance"],
             evidence["verified_facts"],
         )
-        deliverable_content = envelope[
-            "deliverable"
-        ]
+
+        deliverable_content = _render_verified_claims(
+            validated_claims
+        )
+
         claims_json = json.dumps(
-            envelope["claims"],
+            validated_claims,
             ensure_ascii=False,
             separators=(",", ":"),
         )

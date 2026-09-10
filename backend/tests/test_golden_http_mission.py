@@ -628,6 +628,20 @@ def test_golden_9916_http_service_mission(
     assert mission["status"] == "Completed"
     assert mission["progress"] == 100
 
+    assert deliverable is not None
+    assert deliverable["status"] == "Ready"
+
+    assert deliverable["content"] == (
+        "## Verified Results\n\n"
+        "- The FastAPI SQLite service "
+        "was verified across restart."
+    )
+
+    assert (
+        "# Golden 9916 HTTP Deliverable"
+        not in deliverable["content"]
+    )
+
     assert [
         row["status"]
         for row in completed_tasks
@@ -655,14 +669,10 @@ def test_golden_9916_http_service_mission(
 
     assert deliverable["model"] == reporter.REPORTER_MODEL
     assert deliverable["status"] == "Ready"
-    assert (
-        deliverable["content"]
-        == (
-            "# Golden 9916 HTTP Deliverable\n\n"
-            "The FastAPI SQLite service was "
-            "verified across restart.\n\n"
-            "Mission outcome: Completed."
-        )
+    assert deliverable["content"] == (
+        "## Verified Results\n\n"
+        "- The FastAPI SQLite service "
+        "was verified across restart."
     )
 
     assert lease_row is None
