@@ -1509,6 +1509,8 @@ function WorkspaceExecutionEvidence({ result }) {
 export default function MissionQueue() {
   const [missions, setMissions] = useState([]);
   const [missionSearch, setMissionSearch] = useState("");
+  const [showMissionHistory, setShowMissionHistory] =
+    useState(false);
   const [runningMissionId, setRunningMissionId] = useState(null);
   const [executingMissionId, setExecutingMissionId] =
     useState(null);
@@ -2566,8 +2568,12 @@ export default function MissionQueue() {
   const normalizedMissionSearch =
     missionSearch.trim().toLowerCase();
 
-  const filteredMissions = normalizedMissionSearch
-    ? missions.filter((mission) => {
+  const sortedMissions = [...missions].sort(
+    (left, right) => Number(right.id) - Number(left.id),
+  );
+
+  const searchedMissions = normalizedMissionSearch
+    ? sortedMissions.filter((mission) => {
         const searchable = [
           mission.id,
           mission.name,
@@ -2583,7 +2589,22 @@ export default function MissionQueue() {
           normalizedMissionSearch,
         );
       })
-    : missions;
+    : sortedMissions;
+
+  const DEFAULT_MISSION_LIMIT = 5;
+
+  const filteredMissions =
+    normalizedMissionSearch || showMissionHistory
+      ? searchedMissions
+      : searchedMissions.slice(0, DEFAULT_MISSION_LIMIT);
+
+  const hiddenMissionCount =
+    normalizedMissionSearch || showMissionHistory
+      ? 0
+      : Math.max(
+          0,
+          searchedMissions.length - filteredMissions.length,
+        );
 
 
   return (
@@ -2648,6 +2669,40 @@ export default function MissionQueue() {
             outline: "none",
           }}
         />
+
+        {hiddenMissionCount > 0 && !missionSearch && (
+          <button
+            type="button"
+            onClick={() => setShowMissionHistory(true)}
+            style={{
+              padding: "8px 12px",
+              color: "#dce8f4",
+              background: "#17263a",
+              border: "1px solid #38516f",
+              borderRadius: "5px",
+              cursor: "pointer",
+            }}
+          >
+            Mission History ({hiddenMissionCount})
+          </button>
+        )}
+
+        {showMissionHistory && !missionSearch && (
+          <button
+            type="button"
+            onClick={() => setShowMissionHistory(false)}
+            style={{
+              padding: "8px 12px",
+              color: "#dce8f4",
+              background: "#253246",
+              border: "1px solid #435773",
+              borderRadius: "5px",
+              cursor: "pointer",
+            }}
+          >
+            Hide History
+          </button>
+        )}
 
         {missionSearch && (
           <button

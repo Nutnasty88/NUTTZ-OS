@@ -97,19 +97,22 @@ body {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(380px, 520px);
   gap: 24px;
   align-items: start;
 }
 
 .chat-section {
   min-width: 0;
+  position: sticky;
+  top: 20px;
 }
 
 .right-panel {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  min-width: 0;
 }
 
 .panel-card {
