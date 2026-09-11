@@ -882,3 +882,54 @@ def test_selector_claim_rejects_multiple_fact_references():
             task_provenance,
             verified_facts,
         )
+
+
+def test_selector_claim_rejects_duplicate_fact_selection():
+    claims = [
+        {
+            "kind": "execution_verified",
+            "supported_by": [
+                {
+                    "fact_id": "task-1:execution",
+                }
+            ],
+        },
+        {
+            "kind": "execution_verified",
+            "supported_by": [
+                {
+                    "fact_id": "task-1:execution",
+                }
+            ],
+        },
+    ]
+
+    task_provenance = [
+        {
+            "position": 1,
+            "status": "Completed",
+            "verified": True,
+            "evidence_types": [
+                "workspace_verified",
+            ],
+        }
+    ]
+
+    verified_facts = [
+        {
+            "id": "task-1:execution",
+            "type": "execution_verified",
+            "task_position": 1,
+            "evidence_type": "workspace_verified",
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="duplicate fact selection",
+    ):
+        reporter._validate_claim_provenance(
+            claims,
+            task_provenance,
+            verified_facts,
+        )

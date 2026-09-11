@@ -834,6 +834,8 @@ def _validate_claim_provenance(
 
         facts_by_id[fact_id] = fact
 
+    selected_fact_ids: set[str] = set()
+
     for claim in claims:
         if not isinstance(claim, dict):
             raise ValueError(
@@ -951,6 +953,14 @@ def _validate_claim_provenance(
                 "referenced verified fact type."
             )
 
+        if fact_id in selected_fact_ids:
+            raise ValueError(
+                "Reporter claims contain duplicate fact selection "
+                f"{fact_id!r}."
+            )
+
+        selected_fact_ids.add(fact_id)
+
     return claims
 
 
@@ -977,6 +987,8 @@ def _render_verified_claims(
         "## Verified Results",
         "",
     ]
+
+    selected_fact_ids: set[str] = set()
 
     for claim in claims:
         if not isinstance(claim, dict):
@@ -1021,6 +1033,14 @@ def _render_verified_claims(
             raise ValueError(
                 "Reporter claim has no matching verified fact."
             )
+
+        if fact_id in selected_fact_ids:
+            raise ValueError(
+                "Reporter claims contain duplicate fact selection "
+                f"{fact_id!r}."
+            )
+
+        selected_fact_ids.add(fact_id)
 
         if kind == "artifact_verified":
             artifact = matching_fact.get("artifact")
@@ -1164,6 +1184,7 @@ Rules:
 - Do not include text, summary, explanation, or any other model-authored semantic field in a claim.
 - supported_by must be a JSON list containing exactly one entry.
 - That supported_by entry must contain fact_id referencing one exact verified_facts entry.
+- A verified fact_id may be selected by at most one claim.
 - Do not reveal internal reasoning.
 - Do not include <think> tags.
 - Use the supplied mission evidence.

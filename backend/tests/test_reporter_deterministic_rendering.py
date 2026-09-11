@@ -450,3 +450,25 @@ def test_render_rejects_multiple_fact_references():
             claims,
             [first, second],
         )
+
+
+def test_render_rejects_duplicate_fact_selection():
+    claims = [
+        claim(
+            "execution_verified",
+            "task-2:execution",
+        ),
+        claim(
+            "execution_verified",
+            "task-2:execution",
+        ),
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="duplicate fact selection",
+    ):
+        reporter._render_verified_claims(
+            claims,
+            [execution_fact()],
+        )
