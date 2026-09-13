@@ -87,6 +87,21 @@ export async function runMission(missionId) {
   });
 }
 
+export async function getMissionApprovalStatus(missionId) {
+  return request(
+    `/api/missions/${missionId}/approval-status`,
+  );
+}
+
+export async function approveMissionPlan(missionId) {
+  return request(
+    `/api/missions/${missionId}/approve`,
+    {
+      method: "POST",
+    },
+  );
+}
+
 export async function getMissionTasks(missionId) {
   return request(`/api/missions/${missionId}/tasks`);
 }

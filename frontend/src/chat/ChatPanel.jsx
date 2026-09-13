@@ -1,7 +1,9 @@
 import { useState } from "react";
 import {
+  approveMissionPlan,
   createMission,
   getMission,
+  getMissionApprovalStatus,
   getMissionDeliverable,
   getMissionTasks,
   getMissionWorkerStatus,
@@ -108,12 +110,49 @@ function formatMissionStatus(mission, workerData) {
   return parts.join("\n");
 }
 
+function formatApprovalStatus(data) {
+  const approval = data?.approval ?? data ?? {};
+  const approved = approval.approved === true;
+
+  const parts = [
+    `Mission ${approval.mission_id} plan approval`,
+    `Status: ${
+      approved
+        ? "Approved"
+        : "Approval required"
+    }`,
+    `Tasks covered: ${approval.task_count ?? 0}`,
+  ];
+
+  if (approval.approved_at) {
+    parts.push(
+      `Approved at: ${approval.approved_at}`,
+    );
+  }
+
+  if (
+    approval.approved_plan_fingerprint &&
+    approval.current_plan_fingerprint
+  ) {
+    parts.push(
+      approval.approved_plan_fingerprint ===
+        approval.current_plan_fingerprint
+        ? "Plan fingerprint: current"
+        : "Plan fingerprint: changed since approval",
+    );
+  }
+
+  return parts.join("\n");
+}
+
 function helpText() {
   return [
     "NUTTZ control commands:",
     "",
     "create mission <description>",
     "run mission <id>",
+    "approval status <id>",
+    "approve plan <id>",
     "start worker <id>",
     "status mission <id>",
     "pause mission <id>",
@@ -180,6 +219,30 @@ function normalizeNuttzCommand(rawInput) {
   }
 
   match = input.match(
+    /^(?:approval\s+status|plan\s+approval\s+status)(?:\s+for)?(?:\s+mission)?\s*#?\s*(\d+)$/i,
+  );
+
+  if (match) {
+    return `approval status ${match[1]}`;
+  }
+
+  match = input.match(
+    /^is\s+(?:the\s+)?plan\s+approved(?:\s+for)?(?:\s+mission)?\s*#?\s*(\d+)$/i,
+  );
+
+  if (match) {
+    return `approval status ${match[1]}`;
+  }
+
+  match = input.match(
+    /^approve(?:\s+the)?\s+(?:plan(?:\s+for)?|mission)\s*#?\s*(\d+)$/i,
+  );
+
+  if (match) {
+    return `approve plan ${match[1]}`;
+  }
+
+  match = input.match(
     /^run\s+(?:mission\s*)?#?\s*(\d+)$/i,
   );
 
@@ -210,6 +273,14 @@ function panelRequestFromInput(rawInput) {
   const input = normalizeNuttzCommand(rawInput);
 
   const patterns = [
+    [
+      /^approval\s+status\s+(\d+)$/i,
+      "plan",
+    ],
+    [
+      /^approve\s+plan\s+(\d+)$/i,
+      "plan",
+    ],
     [
       /^run\s+mission\s+(\d+)$/i,
       "plan",
@@ -293,6 +364,44 @@ async function executeNuttzCommand(rawInput) {
         "Use:",
         `run mission ${result.mission_id}`,
         "to create its plan and tasks.",
+      ].join("\n"),
+    };
+  }
+
+  match = input.match(
+    /^approval\s+status\s+(\d+)$/i,
+  );
+
+  if (match) {
+    const missionId = missionIdFrom(match);
+    const result =
+      await getMissionApprovalStatus(missionId);
+
+    return {
+      handled: true,
+      content: formatApprovalStatus(result),
+    };
+  }
+
+  match = input.match(
+    /^approve\s+plan\s+(\d+)$/i,
+  );
+
+  if (match) {
+    const missionId = missionIdFrom(match);
+    const result =
+      await approveMissionPlan(missionId);
+
+    return {
+      handled: true,
+      changedMission: true,
+      content: [
+        result.message ||
+          `Mission ${missionId} plan approved.`,
+        "",
+        formatApprovalStatus(result),
+        "",
+        `Use "start worker ${missionId}" to begin execution.`,
       ].join("\n"),
     };
   }
