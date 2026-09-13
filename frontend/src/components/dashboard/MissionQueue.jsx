@@ -2960,7 +2960,35 @@ export default function MissionQueue() {
             className="mission-item"
           >
             <div className="mission-header">
-              <strong>{mission.name}</strong>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: "9px",
+                  minWidth: 0,
+                }}
+              >
+                <span
+                  style={{
+                    flexShrink: 0,
+                    padding: "3px 7px",
+                    borderRadius: "4px",
+                    color: "#8fc2ff",
+                    background:
+                      "rgba(45, 140, 255, 0.12)",
+                    border:
+                      "1px solid rgba(45, 140, 255, 0.38)",
+                    fontSize: "11px",
+                    fontWeight: "800",
+                    letterSpacing: "0.4px",
+                  }}
+                >
+                  #{mission.id}
+                </span>
+
+                <strong>{mission.name}</strong>
+              </div>
+
               <span>{mission.progress}%</span>
             </div>
 

@@ -127,8 +127,87 @@ function helpText() {
   ].join("\n");
 }
 
+function canonicalViewCommand(label, missionId) {
+  const normalizedLabel = label.toLowerCase();
+
+  if (
+    normalizedLabel === "details" ||
+    normalizedLabel === "detail" ||
+    normalizedLabel === "status"
+  ) {
+    return `status mission ${missionId}`;
+  }
+
+  if (
+    normalizedLabel === "task" ||
+    normalizedLabel === "tasks"
+  ) {
+    return `show tasks ${missionId}`;
+  }
+
+  if (normalizedLabel === "report") {
+    return `show deliverable ${missionId}`;
+  }
+
+  return `show ${normalizedLabel} ${missionId}`;
+}
+
+function normalizeNuttzCommand(rawInput) {
+  const input = rawInput
+    .trim()
+    .replace(/\s+/g, " ");
+
+  let match = input.match(
+    /^(?:show|open|view)(?:\s+me)?(?:\s+the)?\s+(plan|research|tasks?|deliverable|report|details?|status)(?:\s+for)?(?:\s+mission)?\s*#?\s*(\d+)$/i,
+  );
+
+  if (match) {
+    return canonicalViewCommand(
+      match[1],
+      match[2],
+    );
+  }
+
+  match = input.match(
+    /^mission\s*#?\s*(\d+)\s+(plan|research|tasks?|deliverable|report|details?|status)$/i,
+  );
+
+  if (match) {
+    return canonicalViewCommand(
+      match[2],
+      match[1],
+    );
+  }
+
+  match = input.match(
+    /^run\s+(?:mission\s*)?#?\s*(\d+)$/i,
+  );
+
+  if (match) {
+    return `run mission ${match[1]}`;
+  }
+
+  match = input.match(
+    /^start\s+(?:mission\s+)?worker\s*#?\s*(\d+)$/i,
+  );
+
+  if (match) {
+    return `start worker ${match[1]}`;
+  }
+
+  match = input.match(
+    /^pause\s+(?:mission\s+)?(?:worker\s*)?#?\s*(\d+)$/i,
+  );
+
+  if (match) {
+    return `pause mission ${match[1]}`;
+  }
+
+  return input;
+}
+
 function panelRequestFromInput(rawInput) {
-  const input = rawInput.trim();
+  const input = normalizeNuttzCommand(rawInput);
 
   const patterns = [
     [
@@ -180,7 +259,7 @@ function panelRequestFromInput(rawInput) {
 }
 
 async function executeNuttzCommand(rawInput) {
-  const input = rawInput.trim();
+  const input = normalizeNuttzCommand(rawInput);
 
   if (/^(help|commands)$/i.test(input)) {
     return {
