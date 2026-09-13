@@ -8,6 +8,7 @@ import {
   getMissionTasks,
   getMissionWorkerStatus,
   pauseMissionWorker,
+  reviseMissionPlan,
   runMission,
   sendChat,
   startMissionWorker,
@@ -153,6 +154,7 @@ function helpText() {
     "run mission <id>",
     "approval status <id>",
     "approve plan <id>",
+    "revise plan <id> <feedback>",
     "start worker <id>",
     "status mission <id>",
     "pause mission <id>",
@@ -197,6 +199,22 @@ function normalizeNuttzCommand(rawInput) {
     .replace(/\s+/g, " ");
 
   let match = input.match(
+    /^revise(?:\s+the)?\s+(?:plan(?:\s+for)?|mission)\s*#?\s*(\d+)\s*[:,-]?\s*(.*)$/i,
+  );
+
+  if (match) {
+    const feedback = match[2].trim();
+
+    return [
+      "revise plan",
+      match[1],
+      feedback,
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  match = input.match(
     /^(?:show|open|view)(?:\s+me)?(?:\s+the)?\s+(plan|research|tasks?|deliverable|report|details?|status)(?:\s+for)?(?:\s+mission)?\s*#?\s*(\d+)$/i,
   );
 
@@ -273,6 +291,10 @@ function panelRequestFromInput(rawInput) {
   const input = normalizeNuttzCommand(rawInput);
 
   const patterns = [
+    [
+      /^revise\s+plan\s+(\d+)(?:\s+.+)?$/i,
+      "plan",
+    ],
     [
       /^approval\s+status\s+(\d+)$/i,
       "plan",
@@ -364,6 +386,45 @@ async function executeNuttzCommand(rawInput) {
         "Use:",
         `run mission ${result.mission_id}`,
         "to create its plan and tasks.",
+      ].join("\n"),
+    };
+  }
+
+  match = input.match(
+    /^revise\s+plan\s+(\d+)(?:\s+(.+))?$/i,
+  );
+
+  if (match) {
+    const missionId = missionIdFrom(match);
+    const feedback = match[2]?.trim();
+
+    if (!feedback) {
+      throw new Error(
+        "Please describe how the plan should be revised. " +
+          `Example: revise plan ${missionId} add a browser test`,
+      );
+    }
+
+    const result = await reviseMissionPlan(
+      missionId,
+      feedback,
+    );
+
+    const taskCount = Array.isArray(result.tasks)
+      ? result.tasks.length
+      : result.approval?.task_count ?? 0;
+
+    return {
+      handled: true,
+      changedMission: true,
+      content: [
+        result.message ||
+          `Mission ${missionId} plan revised.`,
+        `Revised tasks: ${taskCount}`,
+        "Approval status: Approval required",
+        "",
+        `Review with: show plan ${missionId}`,
+        `Approve with: approve plan ${missionId}`,
       ].join("\n"),
     };
   }

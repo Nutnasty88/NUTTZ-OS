@@ -148,7 +148,10 @@ def _validate_http_service_plan(
             )
 
 
-def create_plan(mission_id: int) -> dict[str, Any]:
+def create_plan(
+    mission_id: int,
+    revision_feedback: str | None = None,
+) -> dict[str, Any]:
     log_event(
     mission_id,
     "Planner",
@@ -179,6 +182,21 @@ def create_plan(mission_id: int) -> dict[str, Any]:
 
     if mission is None:
         raise ValueError(f"Mission {mission_id} was not found.")
+
+    revision_feedback = (
+        revision_feedback or ""
+    ).strip()
+
+    current_plan = (
+        get_plan(mission_id)
+        if revision_feedback
+        else None
+    )
+
+    if revision_feedback and current_plan is None:
+        raise ValueError(
+            f"Mission {mission_id} has no existing plan to revise."
+        )
 
     system_prompt = """
 You are Planner Agent v1 inside NUTTZ-OS.
@@ -245,7 +263,29 @@ Rules:
 - Keep the plan focused and practical.
 """.strip()
 
-    user_prompt = f"""
+    if revision_feedback:
+        user_prompt = f"""
+Revise the existing execution plan for this NUTTZ-OS mission.
+
+Mission ID: {mission["id"]}
+Mission title: {mission["title"]}
+Assigned agent: {mission["assigned_agent"]}
+Priority: {mission["priority"]}
+Current status: {mission["status"]}
+
+Existing plan:
+{current_plan["plan"]}
+
+Operator revision request:
+{revision_feedback}
+
+Return a complete replacement plan, not a partial amendment.
+Preserve all original mission requirements unless the operator
+explicitly requests a change. Incorporate the revision request
+while continuing to follow every Planner Agent rule.
+""".strip()
+    else:
+        user_prompt = f"""
 Create an execution plan for this NUTTZ-OS mission.
 
 Mission ID: {mission["id"]}
@@ -385,7 +425,11 @@ Return only the corrected complete plan.
         mission_id,
         "Planner",
         "completed",
-        "Mission plan created",
+        (
+            "Mission plan revised"
+            if revision_feedback
+            else "Mission plan created"
+        ),
     )
 
     return {

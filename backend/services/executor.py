@@ -225,6 +225,40 @@ def get_mission_approval_status(
     }
 
 
+def invalidate_mission_plan_approval(
+    mission_id: int,
+) -> dict[str, Any]:
+    ensure_mission_approval_columns()
+
+    conn = get_connection()
+
+    try:
+        cursor = conn.execute(
+            """
+            UPDATE missions
+            SET
+                approved_plan_fingerprint=NULL,
+                approved_at=NULL,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (mission_id,),
+        )
+
+        if cursor.rowcount != 1:
+            raise ValueError(
+                f"Mission {mission_id} was not found."
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    return get_mission_approval_status(
+        mission_id
+    )
+
+
 def approve_mission_plan(
     mission_id: int,
 ) -> dict[str, Any]:

@@ -102,6 +102,24 @@ export async function approveMissionPlan(missionId) {
   );
 }
 
+export async function reviseMissionPlan(
+  missionId,
+  feedback,
+) {
+  return request(
+    `/api/missions/${missionId}/revise-plan`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        feedback,
+      }),
+    },
+  );
+}
+
 export async function getMissionTasks(missionId) {
   return request(`/api/missions/${missionId}/tasks`);
 }

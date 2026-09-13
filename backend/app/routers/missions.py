@@ -8,6 +8,7 @@ from services.executor import (
     finalize_mission_completion,
     get_mission_approval_status,
     get_repair_history,
+    invalidate_mission_plan_approval,
     get_tasks,
     interrupt_orphaned_running_task,
     reset_blocked_task,
@@ -50,6 +51,10 @@ class MissionCreate(BaseModel):
     title: str
     assigned_agent: str
     priority: str
+
+
+class MissionPlanRevision(BaseModel):
+    feedback: str
 
 
 @router.get("/")
@@ -243,6 +248,139 @@ def run_mission(mission_id: int):
         "planner": planner_result,
         "research": research_result,
         "tasks": tasks,
+    }
+
+
+@router.post("/{mission_id}/revise-plan")
+def revise_mission_plan(
+    mission_id: int,
+    revision: MissionPlanRevision,
+):
+    feedback = revision.feedback.strip()
+
+    if not feedback:
+        raise HTTPException(
+            status_code=400,
+            detail="Plan revision feedback cannot be empty.",
+        )
+
+    current_worker = get_worker_status()
+
+    if current_worker.get("thread_alive"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot revise a plan while an Autonomous "
+                "Worker is active."
+            ),
+        )
+
+    lease = get_worker_lease(mission_id)
+
+    if lease and lease.get("valid") is False:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot revise a plan with invalid worker "
+                "lease metadata."
+            ),
+        )
+
+    if lease and lease.get("active"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Mission {mission_id} has an active worker lease."
+            ),
+        )
+
+    tasks = get_tasks(mission_id)
+
+    if not tasks:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This mission has no task plan to revise. "
+                "Run the Planner first."
+            ),
+        )
+
+    started_tasks = [
+        task
+        for task in tasks
+        if task.get("status") != "Pending"
+    ]
+
+    if started_tasks:
+        first = started_tasks[0]
+
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Plan revision is allowed only before execution. "
+                f"Task {first['position']} is "
+                f"{first['status']}."
+            ),
+        )
+
+    repair_history = get_repair_history(mission_id)
+
+    if repair_history:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Plan revision is blocked because this mission "
+                "has durable Builder repair history."
+            ),
+        )
+
+    try:
+        invalidate_mission_plan_approval(mission_id)
+
+        planner_result = create_plan(
+            mission_id,
+            revision_feedback=feedback,
+        )
+
+        revised_tasks = sync_tasks(
+            mission_id,
+            planner_result["plan"],
+        )
+
+        approval = get_mission_approval_status(
+            mission_id
+        )
+    except ValueError as error:
+        message = str(error)
+
+        raise HTTPException(
+            status_code=(
+                404
+                if "was not found" in message
+                else 400
+            ),
+            detail=message,
+        ) from error
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Plan revision failed: {error}",
+        ) from error
+
+    return {
+        "success": True,
+        "message": (
+            f"Mission {mission_id} plan revised. "
+            "Fresh approval is required."
+        ),
+        "planner": planner_result,
+        "tasks": revised_tasks,
+        "approval": approval,
     }
 
 
