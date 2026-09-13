@@ -1630,6 +1630,51 @@ export default function MissionQueue() {
   }, []);
 
 
+  const loadPlan = useCallback(async (missionId) => {
+    const response = await fetch(
+      `${API_BASE}/missions/${missionId}/plan`,
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(
+        data.detail || "No saved plan was found.",
+      );
+    }
+
+    setPlans((current) => ({
+      ...current,
+      [missionId]: data,
+    }));
+
+    return data;
+  }, []);
+
+
+  const loadResearch = useCallback(async (missionId) => {
+    const response = await fetch(
+      `${API_BASE}/missions/${missionId}/research`,
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(
+        data.detail ||
+          "No saved research was found.",
+      );
+    }
+
+    setResearchByMission((current) => ({
+      ...current,
+      [missionId]: data,
+    }));
+
+    return data;
+  }, []);
+
+
   const loadRecoveryStatus = useCallback(
     async (missionId) => {
       const response = await fetch(
@@ -1683,8 +1728,97 @@ export default function MissionQueue() {
 
     const timer = setInterval(loadMissions, 5000);
 
-    return () => clearInterval(timer);
-  }, [loadMissions]);
+    async function handleMissionChange(event) {
+      await loadMissions();
+
+      const missionId = Number(
+        event?.detail?.missionId,
+      );
+      const panel = event?.detail?.panel;
+
+      if (
+        !Number.isInteger(missionId) ||
+        missionId < 1 ||
+        !panel
+      ) {
+        return;
+      }
+
+      setMissionSearch("");
+      setShowMissionHistory(true);
+
+      setErrors((current) => ({
+        ...current,
+        [missionId]: "",
+      }));
+
+      setOpenDetailsId(null);
+      setOpenPlanId(null);
+      setOpenResearchId(null);
+      setOpenTasksId(null);
+      setOpenDeliverableId(null);
+      setOpenWorkspaceId(null);
+
+      try {
+        if (panel === "details") {
+          await Promise.all([
+            loadMissionDetails(missionId),
+            loadTasks(missionId),
+          ]);
+          setOpenDetailsId(missionId);
+        } else if (panel === "plan") {
+          await loadPlan(missionId);
+          setOpenPlanId(missionId);
+        } else if (panel === "research") {
+          await loadResearch(missionId);
+          setOpenResearchId(missionId);
+        } else if (panel === "tasks") {
+          await loadTasks(missionId);
+          setOpenTasksId(missionId);
+        } else if (panel === "deliverable") {
+          await loadDeliverable(missionId);
+          setOpenDeliverableId(missionId);
+        }
+
+        window.setTimeout(() => {
+          document
+            .getElementById(`mission-${missionId}`)
+            ?.scrollIntoView({
+              behavior: "smooth",
+              block: "start",
+            });
+        }, 100);
+      } catch (error) {
+        setErrors((current) => ({
+          ...current,
+          [missionId]:
+            error?.message ||
+            "Failed to open the requested panel.",
+        }));
+      }
+    }
+
+    window.addEventListener(
+      "nuttz:missions-changed",
+      handleMissionChange,
+    );
+
+    return () => {
+      clearInterval(timer);
+
+      window.removeEventListener(
+        "nuttz:missions-changed",
+        handleMissionChange,
+      );
+    };
+  }, [
+    loadDeliverable,
+    loadMissionDetails,
+    loadMissions,
+    loadPlan,
+    loadResearch,
+    loadTasks,
+  ]);
 
 
   const recoveryMissionIds = missions
@@ -1948,7 +2082,6 @@ export default function MissionQueue() {
     if (openDeliverableId === missionId) {
       setOpenDeliverableId(null);
       setOpenWorkspaceId(null);
-    setOpenWorkspaceId(null);
       return;
     }
 
@@ -2821,7 +2954,11 @@ export default function MissionQueue() {
             : 0;
 
         return (
-          <div key={mission.id} className="mission-item">
+          <div
+            key={mission.id}
+            id={`mission-${mission.id}`}
+            className="mission-item"
+          >
             <div className="mission-header">
               <strong>{mission.name}</strong>
               <span>{mission.progress}%</span>

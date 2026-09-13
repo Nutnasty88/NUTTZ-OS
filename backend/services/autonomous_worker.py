@@ -16,6 +16,7 @@ from services.executor import (
     execute_next_task,
     finalize_mission_completion,
     get_tasks,
+    require_mission_plan_approval,
 )
 
 
@@ -709,6 +710,8 @@ def start_worker(
         raise ValueError(
             "This mission has no tasks. Run or synchronize it first."
         )
+
+    require_mission_plan_approval(mission_id)
 
     total, completed = _count_tasks(tasks)
     pending = [

@@ -3,8 +3,10 @@ from pydantic import BaseModel
 
 from app.database.database import get_connection
 from services.executor import (
+    approve_mission_plan,
     execute_next_task,
     finalize_mission_completion,
+    get_mission_approval_status,
     get_repair_history,
     get_tasks,
     interrupt_orphaned_running_task,
@@ -699,6 +701,11 @@ def execute_mission_task(mission_id: int):
             status_code=404,
             detail=str(error),
         ) from error
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
     except Exception as error:
         raise HTTPException(
             status_code=500,
@@ -994,6 +1001,53 @@ def get_mission_recovery_status(mission_id: int):
         "evidence": evidence,
         "lease": lease,
         "worker": worker,
+    }
+
+
+@router.get("/{mission_id}/approval-status")
+def mission_approval_status(mission_id: int):
+    try:
+        approval = get_mission_approval_status(
+            mission_id
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=404,
+            detail=str(error),
+        ) from error
+
+    return {
+        "success": True,
+        "approval": approval,
+    }
+
+
+@router.post("/{mission_id}/approve")
+def approve_mission(mission_id: int):
+    try:
+        approval = approve_mission_plan(
+            mission_id
+        )
+    except ValueError as error:
+        message = str(error)
+
+        status_code = (
+            404
+            if "was not found" in message
+            else 400
+        )
+
+        raise HTTPException(
+            status_code=status_code,
+            detail=message,
+        ) from error
+
+    return {
+        "success": True,
+        "message": (
+            f"Mission {mission_id} plan approved."
+        ),
+        "approval": approval,
     }
 
 

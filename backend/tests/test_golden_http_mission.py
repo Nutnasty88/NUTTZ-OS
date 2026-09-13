@@ -501,6 +501,12 @@ def test_golden_9916_http_service_mission(
         fake_reporter_chat,
     )
 
+    # This golden fixture represents an explicitly reviewed,
+    # deterministic task plan. Approve that exact plan before
+    # crossing the execution boundary.
+    approval = executor.approve_mission_plan(mission_id)
+    assert approval["approved"] is True
+
     autonomous_worker._stop_event.clear()
 
     lease = autonomous_worker.acquire_worker_lease(

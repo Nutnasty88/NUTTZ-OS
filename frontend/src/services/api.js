@@ -1,36 +1,120 @@
 const API = "http://127.0.0.1:8000";
 
+async function request(path, options = {}) {
+  const response = await fetch(`${API}${path}`, options);
+
+  let data;
+
+  try {
+    data = await response.json();
+  } catch {
+    data = {
+      detail: `HTTP ${response.status}`,
+    };
+  }
+
+  if (!response.ok) {
+    const message =
+      data?.detail ||
+      data?.message ||
+      `Request failed with HTTP ${response.status}`;
+
+    throw new Error(
+      typeof message === "string"
+        ? message
+        : JSON.stringify(message),
+    );
+  }
+
+  return data;
+}
+
 export async function getSystem() {
-  const response = await fetch(`${API}/api/system`);
-  return response.json();
+  return request("/api/system");
 }
 
 export async function getDocker() {
-  const response = await fetch(`${API}/api/docker`);
-  return response.json();
+  return request("/api/docker");
 }
 
 export async function getOllamaStatus() {
-  const response = await fetch(`${API}/api/ollama/status`);
-  return response.json();
+  return request("/api/ollama/status");
 }
 
 export async function getModels() {
-  const response = await fetch(`${API}/api/ollama/models`);
-  return response.json();
+  return request("/api/ollama/models");
 }
 
-export async function sendChat(message, model) {
-  const response = await fetch(`${API}/api/ollama/chat`, {
+export async function sendChat(messages, model = "qwen3:8b") {
+  return request("/api/ollama/chat", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      message,
       model,
+      messages,
+      stream: false,
     }),
   });
+}
 
-  return response.json();
+export async function createMission(
+  title,
+  assignedAgent = "Planner",
+  priority = "Normal",
+) {
+  return request("/api/missions/", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      title,
+      assigned_agent: assignedAgent,
+      priority,
+    }),
+  });
+}
+
+export async function getMission(missionId) {
+  return request(`/api/missions/${missionId}`);
+}
+
+export async function runMission(missionId) {
+  return request(`/api/missions/${missionId}/run`, {
+    method: "POST",
+  });
+}
+
+export async function getMissionTasks(missionId) {
+  return request(`/api/missions/${missionId}/tasks`);
+}
+
+export async function getMissionDeliverable(missionId) {
+  return request(`/api/missions/${missionId}/deliverable`);
+}
+
+export async function getMissionWorkerStatus(missionId) {
+  return request(
+    `/api/missions/${missionId}/worker/status`,
+  );
+}
+
+export async function startMissionWorker(missionId) {
+  return request(
+    `/api/missions/${missionId}/worker/start`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export async function pauseMissionWorker(missionId) {
+  return request(
+    `/api/missions/${missionId}/worker/pause`,
+    {
+      method: "POST",
+    },
+  );
 }

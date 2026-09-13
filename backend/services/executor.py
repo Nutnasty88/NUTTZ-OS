@@ -72,6 +72,240 @@ def ensure_task_table() -> None:
         conn.close()
 
 
+
+def ensure_mission_approval_columns() -> None:
+    conn = get_connection()
+
+    try:
+        columns = {
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA table_info(missions)"
+            ).fetchall()
+        }
+
+        if "approved_plan_fingerprint" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE missions
+                ADD COLUMN approved_plan_fingerprint TEXT
+                """
+            )
+
+        if "approved_at" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE missions
+                ADD COLUMN approved_at TEXT
+                """
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _mission_plan_rows(
+    mission_id: int,
+) -> list[dict[str, Any]]:
+    ensure_task_table()
+
+    conn = get_connection()
+
+    try:
+        mission = conn.execute(
+            """
+            SELECT id
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if mission is None:
+            raise ValueError(
+                f"Mission {mission_id} was not found."
+            )
+
+        rows = conn.execute(
+            """
+            SELECT
+                position,
+                title,
+                instructions
+            FROM mission_tasks
+            WHERE mission_id=?
+            ORDER BY position ASC
+            """,
+            (mission_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    return [
+        {
+            "position": int(row["position"]),
+            "title": str(row["title"]),
+            "instructions": str(row["instructions"]),
+        }
+        for row in rows
+    ]
+
+
+def mission_plan_fingerprint(
+    mission_id: int,
+) -> str | None:
+    tasks = _mission_plan_rows(mission_id)
+
+    if not tasks:
+        return None
+
+    payload = json.dumps(
+        tasks,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    return hashlib.sha256(
+        payload.encode("utf-8")
+    ).hexdigest()
+
+
+def get_mission_approval_status(
+    mission_id: int,
+) -> dict[str, Any]:
+    ensure_mission_approval_columns()
+
+    current_fingerprint = mission_plan_fingerprint(
+        mission_id
+    )
+
+    conn = get_connection()
+
+    try:
+        mission = conn.execute(
+            """
+            SELECT
+                id,
+                approved_plan_fingerprint,
+                approved_at
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if mission is None:
+        raise ValueError(
+            f"Mission {mission_id} was not found."
+        )
+
+    approved_fingerprint = (
+        mission["approved_plan_fingerprint"]
+    )
+
+    approved = bool(
+        current_fingerprint
+        and approved_fingerprint
+        and current_fingerprint == approved_fingerprint
+    )
+
+    tasks = _mission_plan_rows(mission_id)
+
+    return {
+        "mission_id": mission_id,
+        "approved": approved,
+        "approved_at": mission["approved_at"],
+        "approved_plan_fingerprint": approved_fingerprint,
+        "current_plan_fingerprint": current_fingerprint,
+        "task_count": len(tasks),
+    }
+
+
+def approve_mission_plan(
+    mission_id: int,
+) -> dict[str, Any]:
+    ensure_mission_approval_columns()
+
+    fingerprint = mission_plan_fingerprint(
+        mission_id
+    )
+
+    if fingerprint is None:
+        raise ValueError(
+            "This mission has no tasks to approve. "
+            "Run the Planner first."
+        )
+
+    conn = get_connection()
+
+    try:
+        cursor = conn.execute(
+            """
+            UPDATE missions
+            SET
+                approved_plan_fingerprint=?,
+                approved_at=CURRENT_TIMESTAMP,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (
+                fingerprint,
+                mission_id,
+            ),
+        )
+
+        if cursor.rowcount != 1:
+            raise ValueError(
+                f"Mission {mission_id} was not found."
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    return get_mission_approval_status(
+        mission_id
+    )
+
+
+def require_mission_plan_approval(
+    mission_id: int,
+) -> dict[str, Any]:
+    status = get_mission_approval_status(
+        mission_id
+    )
+
+    if status["approved"]:
+        return status
+
+    if status["task_count"] == 0:
+        raise RuntimeError(
+            "Mission plan approval is required, "
+            "but this mission has no tasks."
+        )
+
+    if (
+        status["approved_plan_fingerprint"]
+        and status["current_plan_fingerprint"]
+        and status["approved_plan_fingerprint"]
+        != status["current_plan_fingerprint"]
+    ):
+        raise RuntimeError(
+            "Mission plan approval is no longer valid because "
+            "the task plan changed. Review and approve the "
+            "current plan before starting the worker."
+        )
+
+    raise RuntimeError(
+        "Mission plan review and explicit approval are required "
+        "before starting the Autonomous Worker."
+    )
+
+
 def parse_plan_tasks(plan: str) -> list[dict[str, Any]]:
     success_check = ""
 
@@ -144,6 +378,7 @@ def parse_plan_tasks(plan: str) -> list[dict[str, Any]]:
 
 def sync_tasks(mission_id: int, plan: str) -> list[dict[str, Any]]:
     ensure_task_table()
+    ensure_mission_approval_columns()
 
     tasks = parse_plan_tasks(plan)
 
@@ -249,6 +484,8 @@ def sync_tasks(mission_id: int, plan: str) -> list[dict[str, Any]]:
             SET
                 status='Running',
                 progress=20,
+                approved_plan_fingerprint=NULL,
+                approved_at=NULL,
                 updated_at=CURRENT_TIMESTAMP
             WHERE id=?
             """,
@@ -5596,16 +5833,109 @@ def finalize_mission_completion(
         "completed_tasks": completed_tasks,
     }
 
+def _require_mission_plan_approval_in_transaction(
+    conn,
+    mission_id: int,
+) -> None:
+    """
+    Verify the exact executable task plan using the caller's active
+    transaction. This closes the gap between approval verification
+    and task claiming.
+    """
+    mission = conn.execute(
+        """
+        SELECT
+            approved_plan_fingerprint
+        FROM missions
+        WHERE id=?
+        """,
+        (mission_id,),
+    ).fetchone()
+
+    if mission is None:
+        raise ValueError(
+            f"Mission {mission_id} was not found."
+        )
+
+    rows = conn.execute(
+        """
+        SELECT
+            position,
+            title,
+            instructions
+        FROM mission_tasks
+        WHERE mission_id=?
+        ORDER BY position ASC
+        """,
+        (mission_id,),
+    ).fetchall()
+
+    if not rows:
+        raise RuntimeError(
+            "Mission plan approval is required, "
+            "but this mission has no tasks."
+        )
+
+    tasks = [
+        {
+            "position": int(row["position"]),
+            "title": str(row["title"]),
+            "instructions": str(row["instructions"]),
+        }
+        for row in rows
+    ]
+
+    payload = json.dumps(
+        tasks,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    current_fingerprint = hashlib.sha256(
+        payload.encode("utf-8")
+    ).hexdigest()
+
+    approved_fingerprint = (
+        mission["approved_plan_fingerprint"]
+    )
+
+    if (
+        approved_fingerprint
+        and approved_fingerprint
+        != current_fingerprint
+    ):
+        raise RuntimeError(
+            "Mission plan approval is no longer valid because "
+            "the task plan changed. Review and approve the "
+            "current plan before execution."
+        )
+
+    if not approved_fingerprint:
+        raise RuntimeError(
+            "Mission plan review and explicit approval are "
+            "required before execution."
+        )
+
+
 def execute_next_task(
     mission_id: int,
     worker_owner_token: str | None = None,
 ) -> dict[str, Any]:
     ensure_task_table()
+    ensure_mission_approval_columns()
 
     conn = get_connection()
 
     try:
         conn.execute("BEGIN IMMEDIATE")
+
+        # Bind approval verification and task claiming to the same
+        # SQLite write transaction.
+        _require_mission_plan_approval_in_transaction(
+            conn,
+            mission_id,
+        )
 
         lease = conn.execute(
             """
