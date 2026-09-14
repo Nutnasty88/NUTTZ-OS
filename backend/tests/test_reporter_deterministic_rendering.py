@@ -293,7 +293,8 @@ def test_render_typed_execution_from_verified_fact():
     assert rendered == (
         "## Verified Results\n\n"
         "- Verified execution of main.py completed "
-        "successfully with exit code 0."
+        "successfully with exit code 0. "
+        'Verified stdout: "Buy milk\\n".'
     )
 
 
@@ -472,3 +473,47 @@ def test_render_rejects_duplicate_fact_selection():
             claims,
             [execution_fact()],
         )
+
+def test_render_execution_includes_exact_verified_stdout():
+    rendered = reporter._render_verified_claims(
+        [
+            claim(
+                "execution_verified",
+                "task-2:execution",
+            )
+        ],
+        [execution_fact()],
+    )
+
+    assert 'Verified stdout: "Buy milk\\n".' in rendered
+
+
+def test_render_deduplicates_equivalent_execution_claims():
+    first = execution_fact(
+        fact_id="task-2:execution",
+    )
+    second = execution_fact(
+        fact_id="task-3:execution",
+    )
+    second["task_position"] = 3
+
+    rendered = reporter._render_verified_claims(
+        [
+            claim(
+                "execution_verified",
+                "task-2:execution",
+            ),
+            claim(
+                "execution_verified",
+                "task-3:execution",
+            ),
+        ],
+        [first, second],
+    )
+
+    assert rendered.count(
+        "Verified execution of main.py"
+    ) == 1
+    assert rendered.count(
+        'Verified stdout: "Buy milk\\n".'
+    ) == 1

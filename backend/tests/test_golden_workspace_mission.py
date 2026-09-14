@@ -694,7 +694,8 @@ def test_golden_9911_workspace_mission(
     assert deliverable["content"] == (
         "## Verified Results\n\n"
         "- Verified execution of main.py completed "
-        "successfully with exit code 0."
+        "successfully with exit code 0. "
+        'Verified stdout: "Buy milk\\n".'
     )
 
     assert lease_row is None

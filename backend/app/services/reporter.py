@@ -989,6 +989,7 @@ def _render_verified_claims(
     ]
 
     selected_fact_ids: set[str] = set()
+    rendered_sentences: set[str] = set()
 
     for claim in claims:
         if not isinstance(claim, dict):
@@ -1054,11 +1055,22 @@ def _render_verified_claims(
         elif kind == "execution_verified":
             artifact = matching_fact.get("artifact")
             exit_code = matching_fact.get("exit_code")
+            stdout = matching_fact.get("stdout")
 
             sentence = (
                 f"Verified execution of {artifact} completed "
                 f"successfully with exit code {exit_code}."
             )
+
+            if isinstance(stdout, str) and stdout:
+                rendered_stdout = json.dumps(
+                    stdout,
+                    ensure_ascii=False,
+                )
+
+                sentence += (
+                    f" Verified stdout: {rendered_stdout}."
+                )
 
         elif kind == "http_check_verified":
             method = matching_fact.get("method")
@@ -1097,6 +1109,10 @@ def _render_verified_claims(
                 f"Unsupported Reporter claim kind: {kind!r}."
             )
 
+        if sentence in rendered_sentences:
+            continue
+
+        rendered_sentences.add(sentence)
         lines.append(f"- {sentence}")
 
     return "\n".join(lines)
