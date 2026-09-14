@@ -2078,6 +2078,62 @@ export default function MissionQueue() {
   }
 
 
+  async function regenerateReporter(missionId) {
+    setReporterActionMissionId(missionId);
+
+    setErrors((current) => ({
+      ...current,
+      [missionId]: "",
+    }));
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/missions/${missionId}/deliverable/regenerate`,
+        {
+          method: "POST",
+        },
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail || "Reporter failed to regenerate the report.",
+        );
+      }
+
+      const deliverable = data.deliverable;
+
+      if (!deliverable) {
+        throw new Error(
+          "Reporter completed without returning a deliverable.",
+        );
+      }
+
+      setDeliverablesByMission((current) => ({
+        ...current,
+        [missionId]: deliverable,
+      }));
+
+      setOpenDetailsId(null);
+      setOpenPlanId(null);
+      setOpenResearchId(null);
+      setOpenTasksId(null);
+      setOpenWorkspaceId(null);
+      setOpenDeliverableId(missionId);
+
+      await loadMissions();
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        [missionId]: error.message,
+      }));
+    } finally {
+      setReporterActionMissionId(null);
+    }
+  }
+
+
   async function toggleDeliverable(missionId) {
     if (openDeliverableId === missionId) {
       setOpenDeliverableId(null);
@@ -3234,6 +3290,46 @@ export default function MissionQueue() {
                     : "View Report"}
                 </button>
               )}
+
+              {mission.status === "Completed" &&
+                policy.canViewReport && (
+                  <button
+                    type="button"
+                    disabled={
+                      isReporterAction ||
+                      worker.thread_alive ||
+                      recovery?.lease?.active
+                    }
+                    onClick={() =>
+                      regenerateReporter(mission.id)
+                    }
+                    style={{
+                      padding: "7px 13px",
+                      background: isReporterAction
+                        ? "#66502d"
+                        : "#8a5a16",
+                      color: "white",
+                      border: "1px solid #c58b24",
+                      borderRadius: "4px",
+                      cursor:
+                        isReporterAction ||
+                        worker.thread_alive ||
+                        recovery?.lease?.active
+                          ? "not-allowed"
+                          : "pointer",
+                      opacity:
+                        isReporterAction ||
+                        worker.thread_alive ||
+                        recovery?.lease?.active
+                          ? 0.65
+                          : 1,
+                    }}
+                  >
+                    {isReporterAction
+                      ? "Regenerating..."
+                      : "Regenerate Report"}
+                  </button>
+                )}
 
               {recoveryState === "error" && (
                 <button
