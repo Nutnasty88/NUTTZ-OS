@@ -128,6 +128,15 @@ export async function getMissionDeliverable(missionId) {
   return request(`/api/missions/${missionId}/deliverable`);
 }
 
+export async function regenerateMissionDeliverable(missionId) {
+  return request(
+    `/api/missions/${missionId}/deliverable/regenerate`,
+    {
+      method: "POST",
+    },
+  );
+}
+
 export async function getMissionWorkerStatus(missionId) {
   return request(
     `/api/missions/${missionId}/worker/status`,

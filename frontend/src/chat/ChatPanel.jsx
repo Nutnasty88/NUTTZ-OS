@@ -8,6 +8,7 @@ import {
   getMissionTasks,
   getMissionWorkerStatus,
   pauseMissionWorker,
+  regenerateMissionDeliverable,
   reviseMissionPlan,
   runMission,
   sendChat,
@@ -162,6 +163,7 @@ function helpText() {
     "show research <id>",
     "show tasks <id>",
     "show deliverable <id>",
+    "regenerate report <id>",
     "help",
     "",
     "Anything else is sent to the AI model.",
@@ -212,6 +214,14 @@ function normalizeNuttzCommand(rawInput) {
     ]
       .filter(Boolean)
       .join(" ");
+  }
+
+  match = input.match(
+    /^regenerate(?:\s+the)?\s+(?:report|deliverable)(?:\s+for)?(?:\s+mission)?\s*#?\s*(\d+)$/i,
+  );
+
+  if (match) {
+    return `regenerate report ${match[1]}`;
   }
 
   match = input.match(
@@ -291,6 +301,10 @@ function panelRequestFromInput(rawInput) {
   const input = normalizeNuttzCommand(rawInput);
 
   const patterns = [
+    [
+      /^regenerate\s+report\s+(\d+)$/i,
+      "deliverable",
+    ],
     [
       /^revise\s+plan\s+(\d+)(?:\s+.+)?$/i,
       "plan",
@@ -586,6 +600,35 @@ async function executeNuttzCommand(rawInput) {
         `Mission ${missionId} tasks:`,
         "",
         formatTasks(result),
+      ].join("\n"),
+    };
+  }
+
+  match = input.match(
+    /^regenerate\s+report\s+(\d+)$/i,
+  );
+
+  if (match) {
+    const missionId = missionIdFrom(match);
+    const result =
+      await regenerateMissionDeliverable(missionId);
+
+    const report =
+      result?.deliverable?.content ??
+      result?.content ??
+      result?.report ??
+      "";
+
+    return {
+      handled: true,
+      changedMission: true,
+      content: [
+        result?.message ||
+          `Mission ${missionId} final report regenerated.`,
+        "",
+        typeof report === "string"
+          ? report
+          : JSON.stringify(report, null, 2),
       ].join("\n"),
     };
   }

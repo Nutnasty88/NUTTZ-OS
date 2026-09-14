@@ -924,6 +924,71 @@ def generate_mission_deliverable(mission_id: int):
     }
 
 
+@router.post("/{mission_id}/deliverable/regenerate")
+def regenerate_mission_deliverable(mission_id: int):
+    lease = get_worker_lease(mission_id)
+
+    if lease and lease.get("valid") is False:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Mission {mission_id} has invalid worker lease "
+                "metadata. Report regeneration cannot proceed safely."
+            ),
+        )
+
+    if lease and lease.get("active"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Mission {mission_id} has an active Autonomous "
+                "Worker lease. Wait for the worker to finish before "
+                "regenerating its report."
+            ),
+        )
+
+    existing = get_deliverable(mission_id)
+
+    if not (
+        existing
+        and existing.get("status") == "Ready"
+        and existing.get("content", "").strip()
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Mission {mission_id} does not have an existing "
+                "Ready final deliverable to regenerate."
+            ),
+        )
+
+    try:
+        deliverable = create_deliverable(mission_id)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Reporter Agent failed: {error}",
+        ) from error
+
+    return {
+        "success": True,
+        "message": (
+            f"Mission {mission_id} final report regenerated."
+        ),
+        "deliverable": deliverable,
+    }
+
+
 @router.get("/{mission_id}/deliverable")
 def get_mission_deliverable(mission_id: int):
     deliverable = get_deliverable(mission_id)
