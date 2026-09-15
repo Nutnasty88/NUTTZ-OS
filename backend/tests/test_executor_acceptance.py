@@ -1865,3 +1865,55 @@ def test_future_http_execution_defers_builder_auto_run(
         "later_builder": False,
         "later_execution": True,
     }
+
+
+def test_extracts_arguments_from_single_quoted_python_command():
+    task = {
+        "title": (
+            'Test \'main.py add "Buy milk"\' '
+            "to verify task is saved to database"
+        ),
+        "instructions": (
+            'Test \'main.py add "Buy milk"\' '
+            "to verify task is saved to database"
+        ),
+    }
+
+    assert _controlled_workspace_arguments(
+        task,
+        "main.py",
+    ) == ["add", "Buy milk"]
+
+
+def test_extracts_list_argument_from_single_quoted_python_command():
+    task = {
+        "title": (
+            "Test 'main.py list' to confirm task is displayed "
+            'exactly as "Buy milk"'
+        ),
+        "instructions": (
+            "Test 'main.py list' to confirm task is displayed "
+            'exactly as "Buy milk"'
+        ),
+    }
+
+    assert _controlled_workspace_arguments(
+        task,
+        "main.py",
+    ) == ["list"]
+
+
+def test_single_quoted_command_rejects_shell_control_syntax():
+    task = {
+        "title": (
+            "Test 'main.py list; id' to verify execution"
+        ),
+        "instructions": (
+            "Test 'main.py list; id' to verify execution"
+        ),
+    }
+
+    assert _controlled_workspace_arguments(
+        task,
+        "main.py",
+    ) == []
