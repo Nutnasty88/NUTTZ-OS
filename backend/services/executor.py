@@ -1568,6 +1568,22 @@ def _is_workspace_execution_task(task: Any) -> bool:
     if any(arguments for arguments in command_sequence):
         return True
 
+    persistence_verification = (
+        re.search(
+            r"\b(?:persist|persists|persistence|persistent)\b",
+            normalized,
+        )
+        is not None
+        and re.search(
+            r"\b(?:verify|verification|confirm|check|test)\b",
+            normalized,
+        )
+        is not None
+    )
+
+    if persistence_verification:
+        return False
+
     return bool(
         WORKSPACE_EXECUTION_PATTERN.search(task_text)
     )
@@ -6437,3 +6453,290 @@ Task instructions:
         "tool_results": safe_tool_results,
         "model": EXECUTOR_MODEL,
     }
+
+
+def revise_pending_task(
+    mission_id: int,
+    task_id: int,
+    *,
+    title: str,
+    instructions: str,
+) -> dict[str, Any]:
+    """
+    Revise one unstarted Pending task in place.
+
+    Completed or previously started work is never rewritten.
+
+    The matching numbered step in mission_plans.plan is amended in the
+    same transaction so the human-readable stored plan remains aligned
+    with the executable task rows.
+
+    Because title and instructions are part of the executable-plan
+    fingerprint, approval is invalidated atomically with the revision.
+    """
+    ensure_task_table()
+    ensure_mission_approval_columns()
+
+    revised_title = str(title).strip()
+    revised_instructions = str(instructions).strip()
+
+    if not revised_title:
+        raise ValueError("Task title cannot be empty.")
+
+    if not revised_instructions:
+        raise ValueError("Task instructions cannot be empty.")
+
+    conn = get_connection()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        mission = conn.execute(
+            """
+            SELECT id
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if mission is None:
+            raise ValueError(
+                f"Mission {mission_id} was not found."
+            )
+
+        task = conn.execute(
+            """
+            SELECT
+                id,
+                mission_id,
+                position,
+                title,
+                instructions,
+                status,
+                result,
+                created_at,
+                started_at,
+                completed_at,
+                execution_token
+            FROM mission_tasks
+            WHERE id=? AND mission_id=?
+            """,
+            (task_id, mission_id),
+        ).fetchone()
+
+        if task is None:
+            raise ValueError(
+                f"Task {task_id} was not found in mission "
+                f"{mission_id}."
+            )
+
+        if (
+            task["status"] != "Pending"
+            or task["started_at"] is not None
+            or task["completed_at"] is not None
+            or task["execution_token"] is not None
+        ):
+            raise RuntimeError(
+                "Only an unstarted Pending task may be revised."
+            )
+
+        plan_row = conn.execute(
+            """
+            SELECT id, plan
+            FROM mission_plans
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if plan_row is None:
+            raise RuntimeError(
+                f"Mission {mission_id} has no stored mission plan."
+            )
+
+        original_plan = str(plan_row["plan"])
+
+        parsed_plan_tasks = parse_plan_tasks(original_plan)
+
+        matching_plan_tasks = [
+            item
+            for item in parsed_plan_tasks
+            if int(item["position"]) == int(task["position"])
+        ]
+
+        if len(matching_plan_tasks) != 1:
+            raise RuntimeError(
+                "Stored mission plan does not contain exactly one "
+                f"numbered step for task position {task['position']}."
+            )
+
+        numbered_step_pattern = re.compile(
+            rf"(?ms)"
+            rf"^(?P<prefix>\s*{int(task['position'])}\.\s*)"
+            rf"(?P<body>.*?)"
+            rf"(?=^\s*\d+\.\s*|\Z)"
+        )
+
+        step_matches = list(
+            numbered_step_pattern.finditer(original_plan)
+        )
+
+        if len(step_matches) != 1:
+            raise RuntimeError(
+                "Stored mission plan could not be amended safely "
+                f"for task position {task['position']}."
+            )
+
+        step_match = step_matches[0]
+
+        replacement_body = revised_title
+
+        if revised_instructions != revised_title:
+            replacement_body += (
+                "\n   "
+                + revised_instructions.replace(
+                    "\n",
+                    "\n   ",
+                )
+            )
+
+        original_body = step_match.group("body")
+
+        trailing_whitespace_match = re.search(
+            r"\s*\Z",
+            original_body,
+        )
+
+        trailing_whitespace = (
+            trailing_whitespace_match.group(0)
+            if trailing_whitespace_match is not None
+            else ""
+        )
+
+        replacement_step = (
+            step_match.group("prefix")
+            + replacement_body
+            + trailing_whitespace
+        )
+
+        revised_plan = (
+            original_plan[:step_match.start()]
+            + replacement_step
+            + original_plan[step_match.end():]
+        )
+
+        reparsed_tasks = parse_plan_tasks(revised_plan)
+
+        reparsed_by_position = {
+            int(item["position"]): item
+            for item in reparsed_tasks
+        }
+
+        reparsed_task = reparsed_by_position.get(
+            int(task["position"])
+        )
+
+        if reparsed_task is None:
+            raise RuntimeError(
+                "Stored mission plan amendment failed validation."
+            )
+
+        if (
+            reparsed_task["title"] != revised_title
+            or reparsed_task["instructions"]
+            != revised_instructions
+        ):
+            raise RuntimeError(
+                "Stored mission plan amendment did not round-trip "
+                "to the requested task revision."
+            )
+
+        update = conn.execute(
+            """
+            UPDATE mission_tasks
+            SET
+                title=?,
+                instructions=?
+            WHERE
+                id=?
+                AND mission_id=?
+                AND status='Pending'
+                AND started_at IS NULL
+                AND completed_at IS NULL
+                AND execution_token IS NULL
+            """,
+            (
+                revised_title,
+                revised_instructions,
+                task_id,
+                mission_id,
+            ),
+        )
+
+        if update.rowcount != 1:
+            raise RuntimeError(
+                "Pending task changed while it was being revised."
+            )
+
+        plan_update = conn.execute(
+            """
+            UPDATE mission_plans
+            SET
+                plan=?,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE
+                id=?
+                AND mission_id=?
+                AND plan=?
+            """,
+            (
+                revised_plan,
+                plan_row["id"],
+                mission_id,
+                original_plan,
+            ),
+        )
+
+        if plan_update.rowcount != 1:
+            raise RuntimeError(
+                "Stored mission plan changed while the pending "
+                "task was being revised."
+            )
+
+        conn.execute(
+            """
+            UPDATE missions
+            SET
+                approved_plan_fingerprint=NULL,
+                approved_at=NULL,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (mission_id,),
+        )
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+    revised = next(
+        (
+            item
+            for item in get_tasks(mission_id)
+            if int(item["id"]) == int(task_id)
+        ),
+        None,
+    )
+
+    if revised is None:
+        raise RuntimeError(
+            f"Revised task {task_id} could not be reloaded."
+        )
+
+    return revised

@@ -14,6 +14,7 @@ from services.executor import (
     reset_blocked_task,
     reset_error_task,
     reset_interrupted_task,
+    revise_pending_task,
     rollback_interrupted_task_reset,
     sync_tasks,
 )
@@ -55,6 +56,11 @@ class MissionCreate(BaseModel):
 
 class MissionPlanRevision(BaseModel):
     feedback: str
+
+
+class PendingTaskRevision(BaseModel):
+    title: str
+    instructions: str
 
 
 @router.get("/")
@@ -1204,6 +1210,74 @@ def get_mission_recovery_status(mission_id: int):
         "evidence": evidence,
         "lease": lease,
         "worker": worker,
+    }
+
+
+@router.patch("/{mission_id}/tasks/{task_id}")
+def revise_mission_pending_task(
+    mission_id: int,
+    task_id: int,
+    revision: PendingTaskRevision,
+):
+    worker = get_worker_status()
+
+    if worker.get("thread_alive"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot revise a pending task while an "
+                "Autonomous Worker is active."
+            ),
+        )
+
+    lease = get_worker_lease(mission_id)
+
+    if lease and lease.get("active"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot revise a pending task while the mission "
+                "has an active worker lease."
+            ),
+        )
+
+    try:
+        task = revise_pending_task(
+            mission_id,
+            task_id,
+            title=revision.title,
+            instructions=revision.instructions,
+        )
+        approval = get_mission_approval_status(mission_id)
+
+    except ValueError as error:
+        message = str(error)
+
+        status_code = (
+            404
+            if "was not found" in message
+            else 400
+        )
+
+        raise HTTPException(
+            status_code=status_code,
+            detail=message,
+        ) from error
+
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+
+    return {
+        "success": True,
+        "message": (
+            f"Task {task_id} was revised. "
+            "Fresh mission-plan approval is required."
+        ),
+        "task": task,
+        "approval": approval,
     }
 
 

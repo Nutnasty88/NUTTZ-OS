@@ -1917,3 +1917,48 @@ def test_single_quoted_command_rejects_shell_control_syntax():
         task,
         "main.py",
     ) == []
+
+
+def test_bare_persistence_verification_without_command_is_not_workspace_execution():
+    task = {
+        "title": (
+            "Verify database file persists task data across "
+            "multiple program executions"
+        ),
+        "instructions": (
+            "Verify database file persists task data across "
+            "multiple program executions"
+        ),
+    }
+
+    assert _controlled_workspace_command_sequence(
+        task,
+        "main.py",
+    ) == []
+
+    assert _exact_stdout_requirement(task) is None
+    assert _is_builder_task(task) is False
+    assert _is_workspace_execution_task(task) is False
+
+
+def test_persistence_verification_requires_external_evidence():
+    task = {
+        "title": (
+            "Verify database file persists task data across "
+            "multiple program executions"
+        ),
+        "instructions": (
+            "Verify database file persists task data across "
+            "multiple program executions"
+        ),
+    }
+
+    reason, safe_tools_can_satisfy = _evidence_requirement(task)
+
+    assert reason == (
+        "External validation requires evidence from an approved tool."
+    )
+    assert safe_tools_can_satisfy is False
+
+    assert _is_builder_task(task) is False
+    assert _is_workspace_execution_task(task) is False

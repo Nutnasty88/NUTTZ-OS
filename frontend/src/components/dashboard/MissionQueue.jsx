@@ -1518,6 +1518,8 @@ export default function MissionQueue() {
     useState(null);
   const [reporterActionMissionId, setReporterActionMissionId] =
     useState(null);
+  const [approvalActionMissionId, setApprovalActionMissionId] =
+    useState(null);
 
   const [openDetailsId, setOpenDetailsId] = useState(null);
   const [openPlanId, setOpenPlanId] = useState(null);
@@ -1528,6 +1530,7 @@ export default function MissionQueue() {
 
   const [missionDetails, setMissionDetails] = useState({});
   const [plans, setPlans] = useState({});
+  const [approvalByMission, setApprovalByMission] = useState({});
   const [researchByMission, setResearchByMission] = useState({});
   const [tasksByMission, setTasksByMission] = useState({});
   const [deliverablesByMission, setDeliverablesByMission] =
@@ -1649,6 +1652,30 @@ export default function MissionQueue() {
     }));
 
     return data;
+  }, []);
+
+
+  const loadApprovalStatus = useCallback(async (missionId) => {
+    const response = await fetch(
+      `${API_BASE}/missions/${missionId}/approval-status`,
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(
+        data.detail || "Failed to load plan approval status.",
+      );
+    }
+
+    const approval = data.approval || {};
+
+    setApprovalByMission((current) => ({
+      ...current,
+      [missionId]: approval,
+    }));
+
+    return approval;
   }, []);
 
 
@@ -2168,6 +2195,50 @@ export default function MissionQueue() {
   }
 
 
+  async function approvePlan(missionId) {
+    setApprovalActionMissionId(missionId);
+
+    setErrors((current) => ({
+      ...current,
+      [missionId]: "",
+    }));
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/missions/${missionId}/approve`,
+        {
+          method: "POST",
+        },
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail || "Failed to approve mission plan.",
+        );
+      }
+
+      const approval = data.approval || {};
+
+      setApprovalByMission((current) => ({
+        ...current,
+        [missionId]: approval,
+      }));
+
+      await loadTasks(missionId);
+      await loadMissions();
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        [missionId]: error.message,
+      }));
+    } finally {
+      setApprovalActionMissionId(null);
+    }
+  }
+
+
   async function togglePlan(missionId) {
     if (openPlanId === missionId) {
       setOpenPlanId(null);
@@ -2183,28 +2254,17 @@ export default function MissionQueue() {
     setOpenResearchId(null);
     setOpenTasksId(null);
 
-    if (plans[missionId]) {
-      setOpenPlanId(missionId);
-      return;
-    }
-
     try {
-      const response = await fetch(
-        `${API_BASE}/missions/${missionId}/plan`,
-      );
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(
-          data.detail || "No saved plan was found.",
-        );
+      if (plans[missionId]) {
+        await loadApprovalStatus(missionId);
+        setOpenPlanId(missionId);
+        return;
       }
 
-      setPlans((current) => ({
-        ...current,
-        [missionId]: data,
-      }));
+      await Promise.all([
+        loadPlan(missionId),
+        loadApprovalStatus(missionId),
+      ]);
 
       setOpenPlanId(missionId);
     } catch (error) {
@@ -2952,6 +3012,10 @@ export default function MissionQueue() {
 
         const details = missionDetails[mission.id];
         const plan = plans[mission.id];
+        const approval = approvalByMission[mission.id] || null;
+        const isPlanApproved = approval?.approved === true;
+        const isApprovalAction =
+          approvalActionMissionId === mission.id;
         const research = researchByMission[mission.id];
         const researchReport = research?.report || {};
         const researchTechnologies = Array.isArray(
@@ -3867,14 +3931,47 @@ export default function MissionQueue() {
                     Planner Agent v1
                   </strong>
 
-                  <span
+                  <div
                     style={{
-                      color: "#9fb4c9",
-                      fontSize: "12px",
+                      display: "flex",
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                      justifyContent: "flex-end",
+                      gap: "8px",
                     }}
                   >
-                    {plan.model} · {plan.status}
-                  </span>
+                    <span
+                      style={{
+                        color: "#9fb4c9",
+                        fontSize: "12px",
+                      }}
+                    >
+                      {plan.model} · {plan.status}
+                    </span>
+
+                    <span
+                      style={{
+                        padding: "4px 8px",
+                        borderRadius: "999px",
+                        fontSize: "10px",
+                        fontWeight: 700,
+                        letterSpacing: "0.6px",
+                        color: isPlanApproved
+                          ? "#4de3a5"
+                          : "#ffd166",
+                        background: isPlanApproved
+                          ? "rgba(77, 227, 165, 0.10)"
+                          : "rgba(255, 209, 102, 0.10)",
+                        border: isPlanApproved
+                          ? "1px solid rgba(77, 227, 165, 0.35)"
+                          : "1px solid rgba(255, 209, 102, 0.35)",
+                      }}
+                    >
+                      {isPlanApproved
+                        ? "APPROVED"
+                        : "REVIEW REQUIRED"}
+                    </span>
+                  </div>
                 </div>
 
                 <div
@@ -3886,6 +3983,77 @@ export default function MissionQueue() {
                   }}
                 >
                   {plan.plan}
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    flexWrap: "wrap",
+                    gap: "10px",
+                    marginTop: "14px",
+                    paddingTop: "12px",
+                    borderTop:
+                      "1px solid rgba(23, 166, 115, 0.25)",
+                  }}
+                >
+                  <div
+                    style={{
+                      color: isPlanApproved
+                        ? "#82dcb8"
+                        : "#d6bd72",
+                      fontSize: "11px",
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {isPlanApproved
+                      ? "This exact executable task plan is approved."
+                      : "Review this plan before autonomous execution."}
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={
+                      isPlanApproved ||
+                      isApprovalAction ||
+                      worker.thread_alive ||
+                      recovery?.lease?.active
+                    }
+                    onClick={() => approvePlan(mission.id)}
+                    style={{
+                      padding: "7px 13px",
+                      color: "white",
+                      background: isPlanApproved
+                        ? "#245844"
+                        : isApprovalAction
+                          ? "#56606f"
+                          : "#16875f",
+                      border:
+                        "1px solid rgba(77, 227, 165, 0.55)",
+                      borderRadius: "4px",
+                      cursor:
+                        isPlanApproved ||
+                        isApprovalAction ||
+                        worker.thread_alive ||
+                        recovery?.lease?.active
+                          ? "not-allowed"
+                          : "pointer",
+                      opacity:
+                        isPlanApproved ||
+                        isApprovalAction ||
+                        worker.thread_alive ||
+                        recovery?.lease?.active
+                          ? 0.65
+                          : 1,
+                    }}
+                  >
+                    {isPlanApproved
+                      ? "✓ Plan Approved"
+                      : isApprovalAction
+                        ? "Approving..."
+                        : "Approve Plan"}
+                  </button>
                 </div>
               </div>
             )}
