@@ -409,6 +409,52 @@ def _snapshot() -> dict[str, Any]:
         return result
 
 
+def _stop_for_replan_advisory(
+    execution: dict[str, Any],
+    *,
+    total_tasks: int,
+    completed_tasks: int,
+) -> bool:
+    """
+    Stop autonomous execution when verified evidence recommends replanning.
+
+    This is advisory only. The worker does not call Planner, mutate the
+    mission plan, invalidate approval, or apply a replacement plan.
+    """
+
+    advisory = execution.get("replan_advisory")
+
+    if not isinstance(advisory, dict):
+        return False
+
+    if advisory.get("recommended") is not True:
+        return False
+
+    reason = str(advisory.get("reason") or "").strip()
+
+    if reason:
+        message = (
+            "Autonomous Worker stopped because verified evidence "
+            f"requires plan review: {reason}"
+        )
+    else:
+        message = (
+            "Autonomous Worker stopped because verified evidence "
+            "requires plan review."
+        )
+
+    _update_state(
+        status="Replan Required",
+        current_task_id=None,
+        total_tasks=total_tasks,
+        completed_tasks=completed_tasks,
+        last_error="",
+        last_message=message,
+    )
+
+    return True
+
+
 def _count_tasks(tasks: list[dict[str, Any]]) -> tuple[int, int]:
     total = len(tasks)
     completed = sum(
@@ -638,6 +684,13 @@ def _run_worker(
             refreshed_total, refreshed_completed = _count_tasks(
                 refreshed_tasks
             )
+
+            if _stop_for_replan_advisory(
+                execution,
+                total_tasks=refreshed_total,
+                completed_tasks=refreshed_completed,
+            ):
+                return
 
             _update_state(
                 total_tasks=refreshed_total,

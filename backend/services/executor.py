@@ -6178,27 +6178,39 @@ def execute_next_task(
     )
 
     if _is_builder_task(task):
-        return _complete_builder_task(
+        execution = _complete_builder_task(
             mission=mission,
             task=task,
             execution_token=execution_token,
             worker_owner_token=worker_owner_token,
+        )
+        return _finalize_execution_result(
+            mission_id,
+            execution,
         )
 
     if _is_http_service_execution_task(task):
-        return _complete_http_service_execution_task(
+        execution = _complete_http_service_execution_task(
             mission=mission,
             task=task,
             execution_token=execution_token,
             worker_owner_token=worker_owner_token,
         )
+        return _finalize_execution_result(
+            mission_id,
+            execution,
+        )
 
     if _is_workspace_execution_task(task):
-        return _complete_workspace_execution_task(
+        execution = _complete_workspace_execution_task(
             mission=mission,
             task=task,
             execution_token=execution_token,
             worker_owner_token=worker_owner_token,
+        )
+        return _finalize_execution_result(
+            mission_id,
+            execution,
         )
 
     system_prompt = """
@@ -6441,7 +6453,7 @@ Task instructions:
         "Task execution completed",
     )
 
-    return {
+    execution = {
         "mission_id": mission_id,
         "task_id": task["id"],
         "position": task["position"],
@@ -6453,6 +6465,172 @@ Task instructions:
         "tool_results": safe_tool_results,
         "model": EXECUTOR_MODEL,
     }
+
+    return _finalize_execution_result(
+        mission_id,
+        execution,
+    )
+
+
+REPLAN_REQUIRED_PATTERN = re.compile(
+    r"""
+    \bREPLAN[ \t]+REQUIRED[ \t]*:
+    [ \t]*(?P<reason>[^\r\n]*)
+    """,
+    flags=re.IGNORECASE | re.VERBOSE,
+)
+
+
+REPLAN_VERIFIED_EVIDENCE_BOUNDARIES = (
+    "VERIFIED EXECUTION EVIDENCE:",
+    "VERIFIED HTTP SERVICE EVIDENCE:",
+    "VERIFIED BUILDER EVIDENCE:",
+    "VERIFIED AUTO EXECUTION EVIDENCE:",
+    "DETERMINISTIC ACCEPTANCE EVIDENCE:",
+    "VERIFIED PROJECT MANIFEST:",
+    "SAFE TOOLS EVIDENCE (verified):",
+)
+
+
+def _verified_replan_evidence_region(
+    result: str,
+) -> str:
+    """
+    Return only the trusted evidence region of a persisted task result.
+
+    A replan marker emitted before a recognized verified-evidence boundary
+    is intentionally ignored. This prevents ordinary model prose from
+    requesting replanning merely because verified evidence is appended
+    elsewhere in the same result.
+    """
+
+    boundary_positions = [
+        position
+        for boundary in REPLAN_VERIFIED_EVIDENCE_BOUNDARIES
+        if (position := result.find(boundary)) >= 0
+    ]
+
+    if not boundary_positions:
+        return ""
+
+    return result[min(boundary_positions):]
+
+
+def detect_pending_replan_need(
+    tasks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Detect an explicit verified request to reconsider Pending work.
+
+    This detector is deterministic and side-effect free. It does not
+    mutate mission state, call Planner, or apply a replan.
+    """
+
+    ordered_tasks = sorted(
+        tasks,
+        key=lambda task: (
+            int(task.get("position") or 0),
+            int(task.get("id") or 0),
+        ),
+    )
+
+    pending_tasks = [
+        task
+        for task in ordered_tasks
+        if task.get("status") == "Pending"
+    ]
+
+    empty_detection = {
+        "recommended": False,
+        "reason": "",
+        "triggering_evidence": "",
+        "triggering_task": None,
+        "pending_tasks": pending_tasks,
+    }
+
+    if not pending_tasks:
+        return empty_detection
+
+    completed_tasks = [
+        task
+        for task in ordered_tasks
+        if task.get("status") == "Completed"
+    ]
+
+    if not completed_tasks:
+        return empty_detection
+
+    task = completed_tasks[-1]
+    result = str(task.get("result") or "").strip()
+
+    if not result:
+        return empty_detection
+
+    trusted_evidence = _verified_replan_evidence_region(
+        result,
+    )
+
+    if not trusted_evidence:
+        return empty_detection
+
+    match = REPLAN_REQUIRED_PATTERN.search(
+        trusted_evidence,
+    )
+
+    if match is None:
+        return empty_detection
+
+    reason = match.group("reason").strip()
+
+    if not reason:
+        return empty_detection
+
+    return {
+        "recommended": True,
+        "reason": reason,
+        "triggering_evidence": trusted_evidence,
+        "triggering_task": task,
+        "pending_tasks": pending_tasks,
+    }
+
+
+
+def _attach_replan_advisory(
+    mission_id: int,
+    execution: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Attach a deterministic replan advisory to a completed execution.
+
+    Detection is based on freshly persisted mission task state rather than
+    the caller's in-memory execution result. Non-completed execution results
+    are returned unchanged.
+    """
+
+    if execution.get("status") != "Completed":
+        return execution
+
+    tasks = get_tasks(mission_id)
+    execution["replan_advisory"] = detect_pending_replan_need(tasks)
+
+    return execution
+
+
+def _finalize_execution_result(
+    mission_id: int,
+    execution: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Pass an execution result through common post-execution processing.
+
+    Replan detection remains advisory only. Non-completed execution
+    results are preserved unchanged by the advisory wrapper.
+    """
+
+    return _attach_replan_advisory(
+        mission_id,
+        execution,
+    )
 
 
 def revise_pending_task(

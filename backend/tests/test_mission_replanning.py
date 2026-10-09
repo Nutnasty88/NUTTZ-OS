@@ -1584,3 +1584,661 @@ def test_replan_rejects_different_plan_than_previewed(
 
     assert after_tasks == before_tasks
     assert after_plan == before_plan
+
+
+def test_replan_detector_ignores_normal_completed_evidence():
+    tasks = [
+        {
+            "id": 101,
+            "mission_id": 17001,
+            "position": 1,
+            "title": "Build application",
+            "instructions": "Implement the application",
+            "status": "Completed",
+            "result": (
+                "VERIFIED EXECUTION EVIDENCE: "
+                "application built successfully."
+            ),
+            "created_at": "2026-10-09 10:00:00",
+            "started_at": "2026-10-09 10:01:00",
+            "completed_at": "2026-10-09 10:02:00",
+        },
+        {
+            "id": 102,
+            "mission_id": 17001,
+            "position": 2,
+            "title": "Verify application",
+            "instructions": "Run deterministic verification",
+            "status": "Pending",
+            "result": "",
+            "created_at": "2026-10-09 10:00:00",
+            "started_at": None,
+            "completed_at": None,
+        },
+    ]
+
+    detection = executor.detect_pending_replan_need(tasks)
+
+    assert detection["recommended"] is False
+    assert detection["reason"] == ""
+    assert detection["triggering_evidence"] == ""
+    assert detection["triggering_task"] is None
+    assert detection["pending_tasks"] == [tasks[1]]
+
+
+def test_replan_detector_detects_explicit_replan_evidence():
+    tasks = [
+        {
+            "id": 101,
+            "mission_id": 17001,
+            "position": 1,
+            "title": "Inspect service",
+            "instructions": "Inspect current service behavior",
+            "status": "Completed",
+            "result": (
+                "VERIFIED EXECUTION EVIDENCE:\n"
+                "Service uses a different persistence contract.\n"
+                "REPLAN REQUIRED: remaining verification assumes "
+                "the obsolete contract."
+            ),
+            "created_at": "2026-10-09 10:00:00",
+            "started_at": "2026-10-09 10:01:00",
+            "completed_at": "2026-10-09 10:02:00",
+        },
+        {
+            "id": 102,
+            "mission_id": 17001,
+            "position": 2,
+            "title": "Old verification",
+            "instructions": "Verify the obsolete contract",
+            "status": "Pending",
+            "result": "",
+            "created_at": "2026-10-09 10:00:00",
+            "started_at": None,
+            "completed_at": None,
+        },
+        {
+            "id": 103,
+            "mission_id": 17001,
+            "position": 3,
+            "title": "Final check",
+            "instructions": "Run final acceptance check",
+            "status": "Pending",
+            "result": "",
+            "created_at": "2026-10-09 10:00:00",
+            "started_at": None,
+            "completed_at": None,
+        },
+    ]
+
+    detection = executor.detect_pending_replan_need(tasks)
+
+    assert detection["recommended"] is True
+    assert (
+        detection["reason"]
+        == "remaining verification assumes the obsolete contract."
+    )
+    assert "VERIFIED EXECUTION EVIDENCE" in (
+        detection["triggering_evidence"]
+    )
+    assert detection["triggering_task"] == tasks[0]
+    assert detection["pending_tasks"] == tasks[1:]
+
+
+def test_replan_detector_uses_latest_completed_trigger():
+    tasks = [
+        {
+            "id": 101,
+            "mission_id": 17001,
+            "position": 1,
+            "title": "Initial inspection",
+            "instructions": "Inspect initial state",
+            "status": "Completed",
+            "result": (
+                "REPLAN REQUIRED: first discovered incompatibility."
+            ),
+            "created_at": "2026-10-09 10:00:00",
+            "started_at": "2026-10-09 10:01:00",
+            "completed_at": "2026-10-09 10:02:00",
+        },
+        {
+            "id": 102,
+            "mission_id": 17001,
+            "position": 2,
+            "title": "Second inspection",
+            "instructions": "Inspect updated state",
+            "status": "Completed",
+            "result": (
+                "VERIFIED EXECUTION EVIDENCE:\n"
+                "REPLAN REQUIRED: latest evidence supersedes "
+                "the remaining verification."
+            ),
+            "created_at": "2026-10-09 10:03:00",
+            "started_at": "2026-10-09 10:04:00",
+            "completed_at": "2026-10-09 10:05:00",
+        },
+        {
+            "id": 103,
+            "mission_id": 17001,
+            "position": 3,
+            "title": "Pending verification",
+            "instructions": "Run old verification",
+            "status": "Pending",
+            "result": "",
+            "created_at": "2026-10-09 10:00:00",
+            "started_at": None,
+            "completed_at": None,
+        },
+    ]
+
+    detection = executor.detect_pending_replan_need(tasks)
+
+    assert detection["recommended"] is True
+    assert detection["triggering_task"]["id"] == 102
+    assert (
+        detection["reason"]
+        == "latest evidence supersedes the remaining verification."
+    )
+    assert detection["pending_tasks"] == [tasks[2]]
+
+
+def test_replan_detector_does_not_recommend_without_pending_tail():
+    tasks = [
+        {
+            "id": 101,
+            "mission_id": 17001,
+            "position": 1,
+            "title": "Final verification",
+            "instructions": "Run final verification",
+            "status": "Completed",
+            "result": (
+                "VERIFIED EXECUTION EVIDENCE:\n"
+                "REPLAN REQUIRED: discovered a changed assumption."
+            ),
+            "created_at": "2026-10-09 10:00:00",
+            "started_at": "2026-10-09 10:01:00",
+            "completed_at": "2026-10-09 10:02:00",
+        },
+    ]
+
+    detection = executor.detect_pending_replan_need(tasks)
+
+    assert detection["recommended"] is False
+    assert detection["reason"] == ""
+    assert detection["triggering_evidence"] == ""
+    assert detection["triggering_task"] is None
+    assert detection["pending_tasks"] == []
+
+
+def test_replan_detector_rejects_unverified_model_marker():
+    tasks = [
+        {
+            "id": 201,
+            "mission_id": 17001,
+            "position": 1,
+            "title": "Analyze environment",
+            "instructions": "Analyze the environment",
+            "status": "Completed",
+            "result": (
+                "The model believes the plan should change.\n"
+                "REPLAN REQUIRED: model-generated recommendation."
+            ),
+            "created_at": "2026-10-09 11:00:00",
+            "started_at": "2026-10-09 11:01:00",
+            "completed_at": "2026-10-09 11:02:00",
+        },
+        {
+            "id": 202,
+            "mission_id": 17001,
+            "position": 2,
+            "title": "Pending verification",
+            "instructions": "Run verification",
+            "status": "Pending",
+            "result": "",
+            "created_at": "2026-10-09 11:00:00",
+            "started_at": None,
+            "completed_at": None,
+        },
+    ]
+
+    detection = executor.detect_pending_replan_need(tasks)
+
+    assert detection["recommended"] is False
+    assert detection["reason"] == ""
+    assert detection["triggering_evidence"] == ""
+    assert detection["triggering_task"] is None
+
+
+def test_replan_detector_rejects_marker_before_verified_evidence():
+    tasks = [
+        {
+            "id": 201,
+            "mission_id": 17001,
+            "position": 1,
+            "title": "Inspect environment",
+            "instructions": "Inspect environment",
+            "status": "Completed",
+            "result": (
+                "REPLAN REQUIRED: untrusted model recommendation.\n\n"
+                "SAFE TOOLS EVIDENCE (verified):\n"
+                '[{"tool": "python.version", "ok": true}]'
+            ),
+            "created_at": "2026-10-09 11:00:00",
+            "started_at": "2026-10-09 11:01:00",
+            "completed_at": "2026-10-09 11:02:00",
+        },
+        {
+            "id": 202,
+            "mission_id": 17001,
+            "position": 2,
+            "title": "Pending verification",
+            "instructions": "Run verification",
+            "status": "Pending",
+            "result": "",
+            "created_at": "2026-10-09 11:00:00",
+            "started_at": None,
+            "completed_at": None,
+        },
+    ]
+
+    detection = executor.detect_pending_replan_need(tasks)
+
+    assert detection["recommended"] is False
+    assert detection["reason"] == ""
+    assert detection["triggering_task"] is None
+
+
+def test_replan_detector_accepts_marker_after_safe_tools_boundary():
+    tasks = [
+        {
+            "id": 201,
+            "mission_id": 17001,
+            "position": 1,
+            "title": "Inspect environment",
+            "instructions": "Inspect environment",
+            "status": "Completed",
+            "result": (
+                "Inspection completed.\n\n"
+                "SAFE TOOLS EVIDENCE (verified):\n"
+                '{"verified": true}\n'
+                "REPLAN REQUIRED: verified environment changed."
+            ),
+            "created_at": "2026-10-09 11:00:00",
+            "started_at": "2026-10-09 11:01:00",
+            "completed_at": "2026-10-09 11:02:00",
+        },
+        {
+            "id": 202,
+            "mission_id": 17001,
+            "position": 2,
+            "title": "Pending verification",
+            "instructions": "Run old verification",
+            "status": "Pending",
+            "result": "",
+            "created_at": "2026-10-09 11:00:00",
+            "started_at": None,
+            "completed_at": None,
+        },
+    ]
+
+    detection = executor.detect_pending_replan_need(tasks)
+
+    assert detection["recommended"] is True
+    assert detection["reason"] == "verified environment changed."
+    assert detection["triggering_task"] == tasks[0]
+
+
+def test_replan_detector_accepts_http_verified_evidence_boundary():
+    tasks = [
+        {
+            "id": 201,
+            "mission_id": 17001,
+            "position": 1,
+            "title": "Verify HTTP service",
+            "instructions": "Run structured HTTP verification",
+            "status": "Completed",
+            "result": (
+                "HTTP SERVICE EXECUTION: VERIFIED\n\n"
+                "VERIFIED HTTP SERVICE EVIDENCE:\n"
+                '{"verified": true}\n'
+                "REPLAN REQUIRED: verified API contract changed."
+            ),
+            "created_at": "2026-10-09 11:00:00",
+            "started_at": "2026-10-09 11:01:00",
+            "completed_at": "2026-10-09 11:02:00",
+        },
+        {
+            "id": 202,
+            "mission_id": 17001,
+            "position": 2,
+            "title": "Old API verification",
+            "instructions": "Verify old API contract",
+            "status": "Pending",
+            "result": "",
+            "created_at": "2026-10-09 11:00:00",
+            "started_at": None,
+            "completed_at": None,
+        },
+    ]
+
+    detection = executor.detect_pending_replan_need(tasks)
+
+    assert detection["recommended"] is True
+    assert detection["reason"] == "verified API contract changed."
+    assert detection["triggering_task"] == tasks[0]
+
+
+def test_replan_detector_accepts_builder_verified_evidence_boundary():
+    tasks = [
+        {
+            "id": 201,
+            "mission_id": 17001,
+            "position": 1,
+            "title": "Build project",
+            "instructions": "Build project artifacts",
+            "status": "Completed",
+            "result": (
+                "BUILDER AGENT: COMPLETED\n\n"
+                "VERIFIED BUILDER EVIDENCE:\n"
+                '{"verified": true}\n'
+                "REPLAN REQUIRED: verified artifact layout changed."
+            ),
+            "created_at": "2026-10-09 11:00:00",
+            "started_at": "2026-10-09 11:01:00",
+            "completed_at": "2026-10-09 11:02:00",
+        },
+        {
+            "id": 202,
+            "mission_id": 17001,
+            "position": 2,
+            "title": "Old artifact verification",
+            "instructions": "Verify old artifact layout",
+            "status": "Pending",
+            "result": "",
+            "created_at": "2026-10-09 11:00:00",
+            "started_at": None,
+            "completed_at": None,
+        },
+    ]
+
+    detection = executor.detect_pending_replan_need(tasks)
+
+    assert detection["recommended"] is True
+    assert detection["reason"] == "verified artifact layout changed."
+    assert detection["triggering_task"] == tasks[0]
+
+
+def test_attach_replan_advisory_adds_negative_advisory(
+    monkeypatch,
+):
+    execution = {
+        "mission_id": 17001,
+        "task_id": 101,
+        "position": 1,
+        "title": "Build application",
+        "status": "Completed",
+        "result": "completed",
+    }
+
+    tasks = [
+        {
+            "id": 101,
+            "mission_id": 17001,
+            "position": 1,
+            "title": "Build application",
+            "instructions": "Build application",
+            "status": "Completed",
+            "result": (
+                "VERIFIED EXECUTION EVIDENCE:\n"
+                "build succeeded"
+            ),
+            "created_at": "2026-10-09 12:00:00",
+            "started_at": "2026-10-09 12:01:00",
+            "completed_at": "2026-10-09 12:02:00",
+        },
+        {
+            "id": 102,
+            "mission_id": 17001,
+            "position": 2,
+            "title": "Verify application",
+            "instructions": "Run verification",
+            "status": "Pending",
+            "result": "",
+            "created_at": "2026-10-09 12:00:00",
+            "started_at": None,
+            "completed_at": None,
+        },
+    ]
+
+    monkeypatch.setattr(
+        executor,
+        "get_tasks",
+        lambda mission_id: tasks,
+    )
+
+    result = executor._attach_replan_advisory(
+        17001,
+        execution,
+    )
+
+    assert result is execution
+    assert result["replan_advisory"]["recommended"] is False
+    assert result["replan_advisory"]["reason"] == ""
+    assert result["replan_advisory"]["triggering_task"] is None
+    assert result["replan_advisory"]["pending_tasks"] == [tasks[1]]
+
+
+def test_attach_replan_advisory_adds_verified_recommendation(
+    monkeypatch,
+):
+    execution = {
+        "mission_id": 17001,
+        "task_id": 101,
+        "position": 1,
+        "title": "Inspect service",
+        "status": "Completed",
+        "result": "completed",
+    }
+
+    tasks = [
+        {
+            "id": 101,
+            "mission_id": 17001,
+            "position": 1,
+            "title": "Inspect service",
+            "instructions": "Inspect service",
+            "status": "Completed",
+            "result": (
+                "VERIFIED EXECUTION EVIDENCE:\n"
+                "service contract changed\n"
+                "REPLAN REQUIRED: remaining checks use old contract."
+            ),
+            "created_at": "2026-10-09 12:00:00",
+            "started_at": "2026-10-09 12:01:00",
+            "completed_at": "2026-10-09 12:02:00",
+        },
+        {
+            "id": 102,
+            "mission_id": 17001,
+            "position": 2,
+            "title": "Old verification",
+            "instructions": "Verify old contract",
+            "status": "Pending",
+            "result": "",
+            "created_at": "2026-10-09 12:00:00",
+            "started_at": None,
+            "completed_at": None,
+        },
+    ]
+
+    monkeypatch.setattr(
+        executor,
+        "get_tasks",
+        lambda mission_id: tasks,
+    )
+
+    result = executor._attach_replan_advisory(
+        17001,
+        execution,
+    )
+
+    advisory = result["replan_advisory"]
+
+    assert result is execution
+    assert advisory["recommended"] is True
+    assert (
+        advisory["reason"]
+        == "remaining checks use old contract."
+    )
+    assert advisory["triggering_task"] == tasks[0]
+    assert advisory["pending_tasks"] == [tasks[1]]
+
+
+def test_attach_replan_advisory_skips_noncompleted_execution(
+    monkeypatch,
+):
+    execution = {
+        "mission_id": 17001,
+        "task_id": 101,
+        "position": 1,
+        "title": "Blocked verification",
+        "status": "Blocked",
+    }
+
+    called = False
+
+    def fake_get_tasks(mission_id):
+        nonlocal called
+        called = True
+        raise AssertionError(
+            "Blocked execution must not run replan detection."
+        )
+
+    monkeypatch.setattr(
+        executor,
+        "get_tasks",
+        fake_get_tasks,
+    )
+
+    result = executor._attach_replan_advisory(
+        17001,
+        execution,
+    )
+
+    assert result is execution
+    assert "replan_advisory" not in result
+    assert called is False
+
+
+def test_finalize_execution_result_routes_completed_result_through_advisory(
+    monkeypatch,
+):
+    execution = {
+        "mission_id": 17001,
+        "task_id": 101,
+        "status": "Completed",
+        "result": "verified result",
+    }
+
+    calls = []
+
+    def fake_attach(mission_id, result):
+        calls.append((mission_id, result))
+        result["replan_advisory"] = {
+            "recommended": True,
+            "reason": "verified state changed.",
+        }
+        return result
+
+    monkeypatch.setattr(
+        executor,
+        "_attach_replan_advisory",
+        fake_attach,
+    )
+
+    result = executor._finalize_execution_result(
+        17001,
+        execution,
+    )
+
+    assert result is execution
+    assert calls == [(17001, execution)]
+    assert result["replan_advisory"]["recommended"] is True
+
+
+def test_finalize_execution_result_preserves_blocked_result(
+    monkeypatch,
+):
+    execution = {
+        "mission_id": 17001,
+        "task_id": 101,
+        "status": "Blocked",
+    }
+
+    calls = []
+
+    def fake_attach(mission_id, result):
+        calls.append((mission_id, result))
+        return result
+
+    monkeypatch.setattr(
+        executor,
+        "_attach_replan_advisory",
+        fake_attach,
+    )
+
+    result = executor._finalize_execution_result(
+        17001,
+        execution,
+    )
+
+    assert result is execution
+    assert calls == [(17001, execution)]
+    assert "replan_advisory" not in result
+
+
+def test_replan_detector_ignores_old_marker_after_newer_normal_completion():
+    tasks = [
+        {
+            "id": 101,
+            "mission_id": 17001,
+            "position": 1,
+            "title": "Inspect old contract",
+            "instructions": "Inspect.",
+            "status": "Completed",
+            "result": (
+                "VERIFIED EXECUTION EVIDENCE:\n"
+                "contract changed\n"
+                "REPLAN REQUIRED: remaining checks use old contract."
+            ),
+        },
+        {
+            "id": 102,
+            "mission_id": 17001,
+            "position": 2,
+            "title": "Verify new contract",
+            "instructions": "Verify.",
+            "status": "Completed",
+            "result": (
+                "VERIFIED EXECUTION EVIDENCE:\n"
+                "new contract verified successfully"
+            ),
+        },
+        {
+            "id": 103,
+            "mission_id": 17001,
+            "position": 3,
+            "title": "Continue verification",
+            "instructions": "Continue.",
+            "status": "Pending",
+            "result": "",
+        },
+    ]
+
+    detection = executor.detect_pending_replan_need(tasks)
+
+    assert detection["recommended"] is False
+    assert detection["reason"] == ""
+    assert detection["triggering_evidence"] == ""
+    assert detection["triggering_task"] is None
+    assert detection["pending_tasks"] == [tasks[2]]
