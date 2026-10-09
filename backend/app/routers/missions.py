@@ -11,6 +11,8 @@ from services.executor import (
     invalidate_mission_plan_approval,
     get_tasks,
     interrupt_orphaned_running_task,
+    preview_pending_replan,
+    replan_pending_tasks,
     reset_blocked_task,
     reset_error_task,
     reset_interrupted_task,
@@ -56,6 +58,18 @@ class MissionCreate(BaseModel):
 
 class MissionPlanRevision(BaseModel):
     feedback: str
+
+
+class MissionReplanPreview(BaseModel):
+    replacement_plan: str
+
+
+class MissionReplanApply(BaseModel):
+    replacement_plan: str
+    state_fingerprint: str
+    proposal_fingerprint: str
+    reason: str = ""
+    triggering_evidence: str = ""
 
 
 class PendingTaskRevision(BaseModel):
@@ -254,6 +268,201 @@ def run_mission(mission_id: int):
         "planner": planner_result,
         "research": research_result,
         "tasks": tasks,
+    }
+
+
+@router.post("/{mission_id}/replan/preview")
+def preview_mission_replan(
+    mission_id: int,
+    request: MissionReplanPreview,
+):
+    current_worker = get_worker_status()
+
+    if current_worker.get("thread_alive"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot preview mission replanning while an "
+                "Autonomous Worker is active."
+            ),
+        )
+
+    lease = get_worker_lease(mission_id)
+
+    if lease and lease.get("valid") is False:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot preview mission replanning with invalid "
+                "worker lease metadata."
+            ),
+        )
+
+    if lease and lease.get("active"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Mission {mission_id} has an active worker lease."
+            ),
+        )
+
+    replacement_plan = request.replacement_plan.strip()
+
+    if not replacement_plan:
+        raise HTTPException(
+            status_code=400,
+            detail="Replacement mission plan cannot be empty.",
+        )
+
+    try:
+        preview = preview_pending_replan(
+            mission_id,
+            replacement_plan,
+        )
+    except ValueError as error:
+        message = str(error)
+
+        raise HTTPException(
+            status_code=(
+                404
+                if "was not found" in message
+                else 400
+            ),
+            detail=message,
+        ) from error
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Mission replan preview failed: {error}",
+        ) from error
+
+    return {
+        "success": True,
+        "message": (
+            "Mission replan preview generated. "
+            "No mission state was changed."
+        ),
+        "preview": preview,
+    }
+
+
+@router.post("/{mission_id}/replan/apply")
+def apply_mission_replan(
+    mission_id: int,
+    request: MissionReplanApply,
+):
+    current_worker = get_worker_status()
+
+    if current_worker.get("thread_alive"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot apply mission replanning while an "
+                "Autonomous Worker is active."
+            ),
+        )
+
+    lease = get_worker_lease(mission_id)
+
+    if lease and lease.get("valid") is False:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot apply mission replanning with invalid "
+                "worker lease metadata."
+            ),
+        )
+
+    if lease and lease.get("active"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Mission {mission_id} has an active worker lease."
+            ),
+        )
+
+    replacement_plan = request.replacement_plan.strip()
+    state_fingerprint = request.state_fingerprint.strip()
+    proposal_fingerprint = request.proposal_fingerprint.strip()
+    reason = request.reason.strip()
+    triggering_evidence = request.triggering_evidence.strip()
+
+    if not replacement_plan:
+        raise HTTPException(
+            status_code=400,
+            detail="Replacement mission plan cannot be empty.",
+        )
+
+    if not state_fingerprint:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Replan state fingerprint is required. "
+                "Preview the replacement plan first."
+            ),
+        )
+
+    if not proposal_fingerprint:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Replan proposal fingerprint is required. "
+                "Preview the replacement plan first."
+            ),
+        )
+
+    try:
+        tasks = replan_pending_tasks(
+            mission_id,
+            replacement_plan,
+            expected_state_fingerprint=state_fingerprint,
+            expected_proposal_fingerprint=proposal_fingerprint,
+            reason=reason,
+            triggering_evidence=triggering_evidence,
+        )
+
+        approval = get_mission_approval_status(
+            mission_id
+        )
+
+    except ValueError as error:
+        message = str(error)
+
+        raise HTTPException(
+            status_code=(
+                404
+                if "was not found" in message
+                else 400
+            ),
+            detail=message,
+        ) from error
+
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Mission replan apply failed: {error}",
+        ) from error
+
+    return {
+        "success": True,
+        "message": (
+            "Mission replan applied. "
+            "Fresh mission-plan approval is required "
+            "before execution can continue."
+        ),
+        "tasks": tasks,
+        "approval": approval,
     }
 
 

@@ -6747,6 +6747,7 @@ def replan_pending_tasks(
     replacement_plan: str,
     *,
     expected_state_fingerprint: str | None = None,
+    expected_proposal_fingerprint: str | None = None,
     reason: str = "",
     triggering_evidence: str = "",
 ) -> list[dict[str, Any]]:
@@ -6873,6 +6874,38 @@ def replan_pending_tasks(
                 raise RuntimeError(
                     "Replan preview is stale because mission "
                     "state changed after preview."
+                )
+
+        if expected_proposal_fingerprint is not None:
+            proposal_state_fingerprint = (
+                current_state_fingerprint
+                if expected_state_fingerprint is not None
+                else _pending_replan_state_fingerprint(
+                    mission_id=mission_id,
+                    stored_plan=original_plan,
+                    tasks=[
+                        dict(task)
+                        for task in current_tasks
+                    ],
+                )
+            )
+
+            current_proposal_fingerprint = (
+                _pending_replan_proposal_fingerprint(
+                    state_fingerprint=(
+                        proposal_state_fingerprint
+                    ),
+                    replacement_plan=replacement_plan,
+                )
+            )
+
+            if (
+                current_proposal_fingerprint
+                != str(expected_proposal_fingerprint)
+            ):
+                raise RuntimeError(
+                    "Replan proposal does not match the "
+                    "replacement plan that was previewed."
                 )
 
         first_pending_index = None
@@ -7128,6 +7161,30 @@ def _pending_replan_state_fingerprint(
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _pending_replan_proposal_fingerprint(
+    *,
+    state_fingerprint: str,
+    replacement_plan: str,
+) -> str:
+    """
+    Bind an exact replacement plan to the mission state reviewed
+    during a Replanning v2 preview.
+    """
+    payload = {
+        "state_fingerprint": str(state_fingerprint),
+        "replacement_plan": str(replacement_plan),
+    }
+
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def preview_pending_replan(
     mission_id: int,
     replacement_plan: str,
@@ -7295,11 +7352,19 @@ def preview_pending_replan(
         tasks=tasks,
     )
 
+    proposal_fingerprint = (
+        _pending_replan_proposal_fingerprint(
+            state_fingerprint=state_fingerprint,
+            replacement_plan=replacement_plan,
+        )
+    )
+
     return {
         "mission_id": mission_id,
         "stored_plan": stored_plan,
         "replacement_plan": replacement_plan,
         "state_fingerprint": state_fingerprint,
+        "proposal_fingerprint": proposal_fingerprint,
         "preserved_tasks": preserved_tasks,
         "current_pending_tasks": current_pending_tasks,
         "replacement_pending_tasks": replacement_pending_tasks,

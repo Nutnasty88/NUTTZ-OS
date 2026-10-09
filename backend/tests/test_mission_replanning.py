@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from services import executor
 
 
@@ -1473,3 +1475,112 @@ def test_failed_replan_does_not_record_revision_history(
     )
 
     assert history == []
+
+
+def test_replan_rejects_different_plan_than_previewed(
+    tmp_path,
+    monkeypatch,
+):
+    mission_id, get_connection = _setup_database(
+        tmp_path,
+        monkeypatch,
+    )
+
+    previewed_plan = (
+        "1. Build application\n"
+        "   Implement the application\n"
+        "2. New verification\n"
+        "   Run the reviewed verification\n"
+        "3. New final check\n"
+        "   Run the reviewed final check"
+    )
+
+    different_plan = (
+        "1. Build application\n"
+        "   Implement the application\n"
+        "2. Different verification\n"
+        "   Run a different verification\n"
+        "3. Different final check\n"
+        "   Run a different final check"
+    )
+
+    preview = executor.preview_pending_replan(
+        mission_id,
+        previewed_plan,
+    )
+
+    assert "proposal_fingerprint" in preview
+
+    conn = get_connection()
+
+    try:
+        before_tasks = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT *
+                FROM mission_tasks
+                WHERE mission_id=?
+                ORDER BY position
+                """,
+                (mission_id,),
+            ).fetchall()
+        ]
+
+        before_plan = conn.execute(
+            """
+            SELECT plan
+            FROM mission_plans
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()["plan"]
+
+    finally:
+        conn.close()
+
+    with pytest.raises(
+        RuntimeError,
+        match="proposal",
+    ):
+        executor.replan_pending_tasks(
+            mission_id,
+            different_plan,
+            expected_state_fingerprint=(
+                preview["state_fingerprint"]
+            ),
+            expected_proposal_fingerprint=(
+                preview["proposal_fingerprint"]
+            ),
+        )
+
+    conn = get_connection()
+
+    try:
+        after_tasks = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT *
+                FROM mission_tasks
+                WHERE mission_id=?
+                ORDER BY position
+                """,
+                (mission_id,),
+            ).fetchall()
+        ]
+
+        after_plan = conn.execute(
+            """
+            SELECT plan
+            FROM mission_plans
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()["plan"]
+
+    finally:
+        conn.close()
+
+    assert after_tasks == before_tasks
+    assert after_plan == before_plan
