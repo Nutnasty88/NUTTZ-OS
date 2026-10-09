@@ -7025,7 +7025,7 @@ def replan_pending_tasks(
                 "replanning."
             )
 
-       
+
         history_fingerprint = (
             current_state_fingerprint
             if expected_state_fingerprint is not None
