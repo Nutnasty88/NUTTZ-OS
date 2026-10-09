@@ -6740,3 +6740,647 @@ def revise_pending_task(
         )
 
     return revised
+
+
+def replan_pending_tasks(
+    mission_id: int,
+    replacement_plan: str,
+    *,
+    expected_state_fingerprint: str | None = None,
+    reason: str = "",
+    triggering_evidence: str = "",
+) -> list[dict[str, Any]]:
+    """
+    Replace only the pristine Pending tail of a mission plan.
+
+    Previously started or completed task rows are preserved in place,
+    including their IDs, results, timestamps, and execution evidence.
+
+    The replacement plan must preserve the executable prefix exactly.
+    The stored mission plan, Pending task tail, and approval
+    invalidation are committed atomically.
+    """
+    ensure_task_table()
+    ensure_mission_approval_columns()
+    ensure_mission_replan_history_table()
+
+    replacement_plan = str(replacement_plan).strip()
+    reason = str(reason).strip()
+    triggering_evidence = str(triggering_evidence).strip()
+
+    if not replacement_plan:
+        raise ValueError("Replacement mission plan cannot be empty.")
+
+    replacement_tasks = parse_plan_tasks(replacement_plan)
+
+    if not replacement_tasks:
+        raise ValueError(
+            "Replacement mission plan contained no executable tasks."
+        )
+
+    replacement_positions = [
+        int(task["position"])
+        for task in replacement_tasks
+    ]
+
+    expected_positions = list(
+        range(1, len(replacement_tasks) + 1)
+    )
+
+    if replacement_positions != expected_positions:
+        raise ValueError(
+            "Replacement mission plan task positions must be "
+            "contiguous and start at 1."
+        )
+
+    conn = get_connection()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        mission = conn.execute(
+            """
+            SELECT id
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if mission is None:
+            raise ValueError(
+                f"Mission {mission_id} was not found."
+            )
+
+        plan_row = conn.execute(
+            """
+            SELECT id, plan
+            FROM mission_plans
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if plan_row is None:
+            raise RuntimeError(
+                f"Mission {mission_id} has no stored mission plan."
+            )
+
+        original_plan = str(plan_row["plan"])
+
+        current_tasks = conn.execute(
+            """
+            SELECT
+                id,
+                mission_id,
+                position,
+                title,
+                instructions,
+                status,
+                result,
+                execution_token,
+                created_at,
+                started_at,
+                completed_at
+            FROM mission_tasks
+            WHERE mission_id=?
+            ORDER BY position ASC
+            """,
+            (mission_id,),
+        ).fetchall()
+
+        if not current_tasks:
+            raise RuntimeError(
+                f"Mission {mission_id} has no executable tasks."
+            )
+
+        if expected_state_fingerprint is not None:
+            current_state_fingerprint = (
+                _pending_replan_state_fingerprint(
+                    mission_id=mission_id,
+                    stored_plan=original_plan,
+                    tasks=[
+                        dict(task)
+                        for task in current_tasks
+                    ],
+                )
+            )
+
+            if (
+                current_state_fingerprint
+                != str(expected_state_fingerprint)
+            ):
+                raise RuntimeError(
+                    "Replan preview is stale because mission "
+                    "state changed after preview."
+                )
+
+        first_pending_index = None
+
+        for index, task in enumerate(current_tasks):
+            if task["status"] == "Pending":
+                first_pending_index = index
+                break
+
+        if first_pending_index is None:
+            raise RuntimeError(
+                "Mission has no Pending task tail to replan."
+            )
+
+        preserved_tasks = current_tasks[:first_pending_index]
+        pending_tasks = current_tasks[first_pending_index:]
+
+        for task in pending_tasks:
+            if (
+                task["status"] != "Pending"
+                or task["started_at"] is not None
+                or task["completed_at"] is not None
+                or task["execution_token"] is not None
+            ):
+                raise RuntimeError(
+                    "Replanning requires a contiguous tail of "
+                    "unstarted Pending tasks."
+                )
+
+        if len(replacement_tasks) <= len(preserved_tasks):
+            raise ValueError(
+                "Replacement mission plan must contain at least "
+                "one task after the preserved executed prefix."
+            )
+
+        for index, preserved in enumerate(preserved_tasks):
+            replacement = replacement_tasks[index]
+
+            if (
+                int(replacement["position"])
+                != int(preserved["position"])
+                or replacement["title"]
+                != str(preserved["title"])
+                or replacement["instructions"]
+                != str(preserved["instructions"])
+            ):
+                raise RuntimeError(
+                    "Replacement mission plan attempted to change "
+                    f"preserved task {preserved['position']}."
+                )
+
+        replacement_tail = replacement_tasks[
+            len(preserved_tasks):
+        ]
+
+        delete_ids = [
+            int(task["id"])
+            for task in pending_tasks
+        ]
+
+        placeholders = ",".join(
+            "?"
+            for _ in delete_ids
+        )
+
+        deleted = conn.execute(
+            f"""
+            DELETE FROM mission_tasks
+            WHERE
+                mission_id=?
+                AND id IN ({placeholders})
+                AND status='Pending'
+                AND started_at IS NULL
+                AND completed_at IS NULL
+                AND execution_token IS NULL
+            """,
+            (
+                mission_id,
+                *delete_ids,
+            ),
+        )
+
+        if deleted.rowcount != len(delete_ids):
+            raise RuntimeError(
+                "Pending task tail changed while it was being "
+                "replanned."
+            )
+
+        for task in replacement_tail:
+            conn.execute(
+                """
+                INSERT INTO mission_tasks (
+                    mission_id,
+                    position,
+                    title,
+                    instructions,
+                    status,
+                    result
+                )
+                VALUES (?, ?, ?, ?, 'Pending', '')
+                """,
+                (
+                    mission_id,
+                    int(task["position"]),
+                    str(task["title"]),
+                    str(task["instructions"]),
+                ),
+            )
+
+        plan_update = conn.execute(
+            """
+            UPDATE mission_plans
+            SET
+                plan=?,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE
+                id=?
+                AND mission_id=?
+                AND plan=?
+            """,
+            (
+                replacement_plan,
+                plan_row["id"],
+                mission_id,
+                original_plan,
+            ),
+        )
+
+        if plan_update.rowcount != 1:
+            raise RuntimeError(
+                "Stored mission plan changed while the Pending "
+                "task tail was being replanned."
+            )
+
+        approval_update = conn.execute(
+            """
+            UPDATE missions
+            SET
+                approved_plan_fingerprint=NULL,
+                approved_at=NULL,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (mission_id,),
+        )
+
+        if approval_update.rowcount != 1:
+            raise RuntimeError(
+                "Mission approval invalidation failed during "
+                "replanning."
+            )
+
+       
+        history_fingerprint = (
+            current_state_fingerprint
+            if expected_state_fingerprint is not None
+            else _pending_replan_state_fingerprint(
+                mission_id=mission_id,
+                stored_plan=original_plan,
+                tasks=[
+                    dict(task)
+                    for task in current_tasks
+                ],
+            )
+        )
+
+        conn.execute(
+            """
+            INSERT INTO mission_replan_history (
+                mission_id,
+                original_plan,
+                replacement_plan,
+                reason,
+                triggering_evidence,
+                state_fingerprint
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                mission_id,
+                original_plan,
+                replacement_plan,
+                reason,
+                triggering_evidence,
+                history_fingerprint,
+            ),
+        )
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+    return get_tasks(mission_id)
+
+
+def _pending_replan_state_fingerprint(
+    *,
+    mission_id: int,
+    stored_plan: str,
+    tasks: list[dict[str, Any]],
+) -> str:
+    """
+    Fingerprint the exact mission state reviewed for a Pending-tail replan.
+
+    This intentionally includes task execution state and result evidence,
+    not only executable-plan content. A preview therefore becomes stale
+    when relevant mission task state changes.
+    """
+    payload = {
+        "mission_id": int(mission_id),
+        "stored_plan": str(stored_plan),
+        "tasks": [
+            {
+                "id": int(task["id"]),
+                "position": int(task["position"]),
+                "title": str(task["title"]),
+                "instructions": str(task["instructions"]),
+                "status": str(task["status"]),
+                "result": str(task["result"] or ""),
+                "execution_token": task["execution_token"],
+                "created_at": (
+                    str(task["created_at"])
+                    if task["created_at"] is not None
+                    else None
+                ),
+                "started_at": (
+                    str(task["started_at"])
+                    if task["started_at"] is not None
+                    else None
+                ),
+                "completed_at": (
+                    str(task["completed_at"])
+                    if task["completed_at"] is not None
+                    else None
+                ),
+            }
+            for task in tasks
+        ],
+    }
+
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def preview_pending_replan(
+    mission_id: int,
+    replacement_plan: str,
+) -> dict[str, Any]:
+    """
+    Validate and preview a Pending-tail replan without mutating the DB.
+
+    The returned state_fingerprint identifies the exact stored plan,
+    task identities, task state, and task evidence reviewed by the
+    operator.
+    """
+    ensure_task_table()
+    ensure_mission_approval_columns()
+
+    replacement_plan = str(replacement_plan).strip()
+
+    if not replacement_plan:
+        raise ValueError("Replacement mission plan cannot be empty.")
+
+    replacement_tasks = parse_plan_tasks(replacement_plan)
+
+    if not replacement_tasks:
+        raise ValueError(
+            "Replacement mission plan contained no executable tasks."
+        )
+
+    replacement_positions = [
+        int(task["position"])
+        for task in replacement_tasks
+    ]
+
+    expected_positions = list(
+        range(1, len(replacement_tasks) + 1)
+    )
+
+    if replacement_positions != expected_positions:
+        raise ValueError(
+            "Replacement mission plan task positions must be "
+            "contiguous and start at 1."
+        )
+
+    conn = get_connection()
+
+    try:
+        mission = conn.execute(
+            """
+            SELECT id
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if mission is None:
+            raise ValueError(
+                f"Mission {mission_id} was not found."
+            )
+
+        plan_row = conn.execute(
+            """
+            SELECT id, plan
+            FROM mission_plans
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if plan_row is None:
+            raise RuntimeError(
+                f"Mission {mission_id} has no stored mission plan."
+            )
+
+        stored_plan = str(plan_row["plan"])
+
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                mission_id,
+                position,
+                title,
+                instructions,
+                status,
+                result,
+                execution_token,
+                created_at,
+                started_at,
+                completed_at
+            FROM mission_tasks
+            WHERE mission_id=?
+            ORDER BY position ASC
+            """,
+            (mission_id,),
+        ).fetchall()
+
+        if not rows:
+            raise RuntimeError(
+                f"Mission {mission_id} has no executable tasks."
+            )
+
+        tasks = [
+            dict(row)
+            for row in rows
+        ]
+
+    finally:
+        conn.close()
+
+    first_pending_index = None
+
+    for index, task in enumerate(tasks):
+        if task["status"] == "Pending":
+            first_pending_index = index
+            break
+
+    if first_pending_index is None:
+        raise RuntimeError(
+            "Mission has no Pending task tail to replan."
+        )
+
+    preserved_tasks = tasks[:first_pending_index]
+    current_pending_tasks = tasks[first_pending_index:]
+
+    for task in current_pending_tasks:
+        if (
+            task["status"] != "Pending"
+            or task["started_at"] is not None
+            or task["completed_at"] is not None
+            or task["execution_token"] is not None
+        ):
+            raise RuntimeError(
+                "Replanning requires a contiguous tail of "
+                "unstarted Pending tasks."
+            )
+
+    if len(replacement_tasks) <= len(preserved_tasks):
+        raise ValueError(
+            "Replacement mission plan must contain at least "
+            "one task after the preserved executed prefix."
+        )
+
+    for index, preserved in enumerate(preserved_tasks):
+        replacement = replacement_tasks[index]
+
+        if (
+            int(replacement["position"])
+            != int(preserved["position"])
+            or replacement["title"]
+            != str(preserved["title"])
+            or replacement["instructions"]
+            != str(preserved["instructions"])
+        ):
+            raise RuntimeError(
+                "Replacement mission plan attempted to change "
+                f"preserved task {preserved['position']}."
+            )
+
+    replacement_pending_tasks = replacement_tasks[
+        len(preserved_tasks):
+    ]
+
+    state_fingerprint = _pending_replan_state_fingerprint(
+        mission_id=mission_id,
+        stored_plan=stored_plan,
+        tasks=tasks,
+    )
+
+    return {
+        "mission_id": mission_id,
+        "stored_plan": stored_plan,
+        "replacement_plan": replacement_plan,
+        "state_fingerprint": state_fingerprint,
+        "preserved_tasks": preserved_tasks,
+        "current_pending_tasks": current_pending_tasks,
+        "replacement_pending_tasks": replacement_pending_tasks,
+    }
+
+
+def ensure_mission_replan_history_table() -> None:
+    """
+    Ensure the durable Mission Replanning v2 audit table exists.
+    """
+    conn = get_connection()
+
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mission_replan_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mission_id INTEGER NOT NULL,
+                original_plan TEXT NOT NULL,
+                replacement_plan TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                triggering_evidence TEXT NOT NULL DEFAULT '',
+                state_fingerprint TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (mission_id)
+                    REFERENCES missions(id)
+                    ON DELETE CASCADE
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_mission_replan_history_mission_id
+            ON mission_replan_history (
+                mission_id,
+                id
+            )
+            """
+        )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
+def get_mission_replan_history(
+    mission_id: int,
+) -> list[dict[str, Any]]:
+    """
+    Return Mission Replanning v2 history in chronological order.
+    """
+    ensure_mission_replan_history_table()
+
+    conn = get_connection()
+
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                mission_id,
+                original_plan,
+                replacement_plan,
+                reason,
+                triggering_evidence,
+                state_fingerprint,
+                created_at
+            FROM mission_replan_history
+            WHERE mission_id=?
+            ORDER BY id ASC
+            """,
+            (mission_id,),
+        ).fetchall()
+
+    finally:
+        conn.close()
+
+    return [
+        dict(row)
+        for row in rows
+    ]
