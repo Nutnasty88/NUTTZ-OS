@@ -7,6 +7,7 @@ from services.executor import (
     execute_next_task,
     finalize_mission_completion,
     get_mission_approval_status,
+    get_mission_replan_history,
     get_repair_history,
     invalidate_mission_plan_approval,
     get_tasks,
@@ -268,6 +269,31 @@ def run_mission(mission_id: int):
         "planner": planner_result,
         "research": research_result,
         "tasks": tasks,
+    }
+
+
+@router.get("/{mission_id}/replan/history")
+def mission_replan_history(
+    mission_id: int,
+):
+    try:
+        history = get_mission_replan_history(
+            mission_id
+        )
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Mission replan history retrieval failed: "
+                f"{error}"
+            ),
+        ) from error
+
+    return {
+        "success": True,
+        "mission_id": mission_id,
+        "history": history,
     }
 
 

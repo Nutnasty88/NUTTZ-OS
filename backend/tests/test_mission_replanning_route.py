@@ -443,3 +443,89 @@ def test_replan_apply_route_maps_proposal_mismatch_to_conflict(
 
     assert caught.value.status_code == 409
     assert "proposal" in caught.value.detail
+
+
+def test_replan_history_route_returns_chronological_history(
+    monkeypatch,
+):
+    calls = []
+
+    expected_history = [
+        {
+            "id": 1,
+            "mission_id": 9188,
+            "original_plan": (
+                "1. Build application\n"
+                "2. Old verification"
+            ),
+            "replacement_plan": (
+                "1. Build application\n"
+                "2. Fresh verification"
+            ),
+            "reason": "Execution evidence changed the remaining work.",
+            "triggering_evidence": "VERIFIED EXECUTION EVIDENCE",
+            "state_fingerprint": "state-fingerprint",
+            "created_at": "2026-10-09 01:00:00",
+        },
+        {
+            "id": 2,
+            "mission_id": 9188,
+            "original_plan": (
+                "1. Build application\n"
+                "2. Fresh verification"
+            ),
+            "replacement_plan": (
+                "1. Build application\n"
+                "2. Final verification"
+            ),
+            "reason": "New verification evidence required another revision.",
+            "triggering_evidence": "SECOND VERIFIED EVIDENCE",
+            "state_fingerprint": "second-state-fingerprint",
+            "created_at": "2026-10-09 02:00:00",
+        },
+    ]
+
+    def history(mission_id):
+        calls.append(mission_id)
+        return expected_history
+
+    monkeypatch.setattr(
+        missions,
+        "get_mission_replan_history",
+        history,
+        raising=False,
+    )
+
+    result = missions.mission_replan_history(9188)
+
+    assert result["success"] is True
+    assert result["mission_id"] == 9188
+    assert result["history"] == expected_history
+    assert calls == [9188]
+
+
+def test_replan_history_route_returns_empty_history(
+    monkeypatch,
+):
+    calls = []
+
+    def history(mission_id):
+        calls.append(mission_id)
+        return []
+
+    monkeypatch.setattr(
+        missions,
+        "get_mission_replan_history",
+        history,
+        raising=False,
+    )
+
+    result = missions.mission_replan_history(9188)
+
+    assert result == {
+        "success": True,
+        "mission_id": 9188,
+        "history": [],
+    }
+
+    assert calls == [9188]
