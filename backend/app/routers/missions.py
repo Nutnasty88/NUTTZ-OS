@@ -21,7 +21,11 @@ from services.executor import (
     rollback_interrupted_task_reset,
     sync_tasks,
 )
-from services.planner import create_plan, get_plan
+from services.planner import (
+    create_plan,
+    get_plan,
+    propose_replan,
+)
 from app.services.researcher import get_research_report, research
 from app.services.reporter import create_deliverable, get_deliverable
 from services.autonomous_worker import (
@@ -59,6 +63,12 @@ class MissionCreate(BaseModel):
 
 class MissionPlanRevision(BaseModel):
     feedback: str
+
+
+class MissionReplanProposal(BaseModel):
+    completed_work: str = ""
+    triggering_evidence: str = ""
+    reason: str = ""
 
 
 class MissionReplanPreview(BaseModel):
@@ -294,6 +304,102 @@ def mission_replan_history(
         "success": True,
         "mission_id": mission_id,
         "history": history,
+    }
+
+
+@router.post("/{mission_id}/replan/propose")
+def propose_mission_replan(
+    mission_id: int,
+    request: MissionReplanProposal,
+):
+    current_worker = get_worker_status()
+
+    if current_worker.get("thread_alive"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot propose mission replanning while an "
+                "Autonomous Worker is active."
+            ),
+        )
+
+    lease = get_worker_lease(mission_id)
+
+    if lease and lease.get("valid") is False:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot propose mission replanning with invalid "
+                "worker lease metadata."
+            ),
+        )
+
+    if lease and lease.get("active"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Mission {mission_id} has an active worker lease."
+            ),
+        )
+
+    completed_work = request.completed_work.strip()
+    triggering_evidence = request.triggering_evidence.strip()
+    reason = request.reason.strip()
+
+    try:
+        proposal = propose_replan(
+            mission_id,
+            completed_work=completed_work,
+            triggering_evidence=triggering_evidence,
+            reason=reason,
+        )
+
+        replacement_plan = str(
+            proposal.get("replacement_plan", "")
+        ).strip()
+
+        if not replacement_plan:
+            raise RuntimeError(
+                "Planner returned an empty replacement plan."
+            )
+
+        preview = preview_pending_replan(
+            mission_id,
+            replacement_plan,
+        )
+
+    except ValueError as error:
+        message = str(error)
+
+        raise HTTPException(
+            status_code=(
+                404
+                if "was not found" in message
+                else 400
+            ),
+            detail=message,
+        ) from error
+
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Mission replan proposal failed: {error}",
+        ) from error
+
+    return {
+        "success": True,
+        "message": (
+            "Mission replan proposal generated and validated. "
+            "No mission state was changed."
+        ),
+        "proposal": proposal,
+        "preview": preview,
     }
 
 

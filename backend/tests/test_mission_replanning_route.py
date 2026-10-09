@@ -51,6 +51,7 @@ def _configure(
             ),
             "replacement_plan": replacement_plan,
             "state_fingerprint": "preview-fingerprint",
+            "proposal_fingerprint": "proposal-fingerprint",
             "preserved_tasks": [
                 {
                     "id": 101,
@@ -529,3 +530,206 @@ def test_replan_history_route_returns_empty_history(
     }
 
     assert calls == [9188]
+
+
+def test_replan_propose_route_generates_validated_preview(
+    monkeypatch,
+):
+    calls = _configure(monkeypatch)
+
+    replacement_plan = (
+        "1. Build application\n"
+        "2. Fresh verification"
+    )
+
+    def propose_replan(
+        mission_id,
+        *,
+        completed_work,
+        triggering_evidence,
+        reason,
+    ):
+        calls.append(
+            (
+                "propose",
+                mission_id,
+                completed_work,
+                triggering_evidence,
+                reason,
+            )
+        )
+
+        return {
+            "mission_id": mission_id,
+            "replacement_plan": replacement_plan,
+            "reason": reason,
+            "triggering_evidence": triggering_evidence,
+        }
+
+    monkeypatch.setattr(
+        missions,
+        "propose_replan",
+        propose_replan,
+        raising=False,
+    )
+
+    result = missions.propose_mission_replan(
+        9188,
+        missions.MissionReplanProposal(
+            completed_work=(
+                "Task 1 completed with verified evidence."
+            ),
+            triggering_evidence=(
+                "VERIFIED EXECUTION EVIDENCE"
+            ),
+            reason=(
+                "Remaining verification is no longer appropriate."
+            ),
+        ),
+    )
+
+    assert result["success"] is True
+    assert (
+        result["proposal"]["replacement_plan"]
+        == replacement_plan
+    )
+    assert (
+        result["preview"]["state_fingerprint"]
+        == "preview-fingerprint"
+    )
+    assert (
+        result["preview"]["proposal_fingerprint"]
+        == "proposal-fingerprint"
+    )
+
+    assert calls == [
+        (
+            "propose",
+            9188,
+            "Task 1 completed with verified evidence.",
+            "VERIFIED EXECUTION EVIDENCE",
+            "Remaining verification is no longer appropriate.",
+        ),
+        (
+            "preview",
+            9188,
+            replacement_plan,
+        ),
+    ]
+
+
+def test_replan_propose_route_rejects_active_worker(
+    monkeypatch,
+):
+    calls = _configure(
+        monkeypatch,
+        worker={
+            "thread_alive": True,
+            "mission_id": 9188,
+        },
+    )
+
+    def propose_replan(*args, **kwargs):
+        calls.append(("propose",))
+        raise AssertionError(
+            "Planner must not run while worker is active."
+        )
+
+    monkeypatch.setattr(
+        missions,
+        "propose_replan",
+        propose_replan,
+        raising=False,
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        missions.propose_mission_replan(
+            9188,
+            missions.MissionReplanProposal(
+                completed_work="Completed work.",
+                triggering_evidence="Evidence.",
+                reason="Reason.",
+            ),
+        )
+
+    assert caught.value.status_code == 409
+    assert "Worker" in caught.value.detail
+    assert calls == []
+
+
+def test_replan_propose_route_maps_invalid_planner_proposal_to_conflict(
+    monkeypatch,
+):
+    calls = _configure(monkeypatch)
+
+    invalid_plan = (
+        "1. Rewrite completed work\n"
+        "2. Fresh verification"
+    )
+
+    def propose_replan(
+        mission_id,
+        *,
+        completed_work,
+        triggering_evidence,
+        reason,
+    ):
+        calls.append(("propose", mission_id))
+
+        return {
+            "mission_id": mission_id,
+            "replacement_plan": invalid_plan,
+            "reason": reason,
+            "triggering_evidence": triggering_evidence,
+        }
+
+    def reject_preview(
+        mission_id,
+        replacement_plan,
+    ):
+        calls.append(
+            (
+                "preview",
+                mission_id,
+                replacement_plan,
+            )
+        )
+
+        raise RuntimeError(
+            "Replacement plan does not match preserved completed tasks."
+        )
+
+    monkeypatch.setattr(
+        missions,
+        "propose_replan",
+        propose_replan,
+        raising=False,
+    )
+
+    monkeypatch.setattr(
+        missions,
+        "preview_pending_replan",
+        reject_preview,
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        missions.propose_mission_replan(
+            9188,
+            missions.MissionReplanProposal(
+                completed_work="Completed work.",
+                triggering_evidence="Evidence.",
+                reason="Reason.",
+            ),
+        )
+
+    assert caught.value.status_code == 409
+    assert "preserved" in caught.value.detail
+
+    assert calls == [
+        ("propose", 9188),
+        (
+            "preview",
+            9188,
+            invalid_plan,
+        ),
+    ]
