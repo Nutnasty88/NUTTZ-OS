@@ -440,6 +440,178 @@ Return only the corrected complete plan.
     }
 
 
+def propose_replan(
+    mission_id: int,
+    *,
+    completed_work: str,
+    triggering_evidence: str,
+    reason: str,
+) -> dict[str, Any]:
+    """
+    Generate a read-only Mission Replanning v2 proposal.
+
+    This function does not mutate mission_plans or mission_tasks.
+    The returned replacement plan must still pass the Executor
+    replan preview before it can be applied.
+    """
+    ensure_plan_table()
+
+    conn = get_connection()
+
+    try:
+        mission = conn.execute(
+            """
+            SELECT
+                id,
+                title,
+                status,
+                assigned_agent,
+                priority
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if mission is None:
+            raise ValueError(
+                f"Mission {mission_id} was not found."
+            )
+
+        current_plan_row = conn.execute(
+            """
+            SELECT plan
+            FROM mission_plans
+            WHERE mission_id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+    finally:
+        conn.close()
+
+    if current_plan_row is None:
+        raise ValueError(
+            f"Mission {mission_id} has no existing plan to replan."
+        )
+
+    completed_work = (completed_work or "").strip()
+    triggering_evidence = (
+        triggering_evidence or ""
+    ).strip()
+    reason = (reason or "").strip()
+
+    current_plan = str(current_plan_row["plan"])
+
+    system_prompt = """
+You are Planner Agent v1 inside NUTTZ-OS.
+
+You are generating a Mission Replanning v2 proposal after execution
+has already begun.
+
+Rules:
+- Return only the finished replacement plan.
+- Do not reveal internal reasoning.
+- Do not include <think> tags.
+- Return a complete numbered execution plan, not a partial amendment.
+- Completed work is immutable history.
+- Preserve every completed task in the existing plan exactly.
+- Do not rewrite, renumber, remove, or reinterpret completed work.
+- Replace only the remaining unstarted Pending portion when evidence
+  shows that the old remaining plan is no longer appropriate.
+- Keep numbered task positions contiguous and in execution order.
+- Give each new Pending task a short title and clear action.
+- For any task that creates or changes application behavior, explicitly
+  describe it as an implementation task using a verb such as Implement,
+  Modify, Update, or Create.
+- Every implementation task must explicitly name the source file it
+  creates or changes.
+- Keep execution or verification tasks separate from implementation
+  tasks.
+- Treat databases and other mutable runtime state as runtime artifacts,
+  not Builder-created files.
+- For SQLite-backed applications, implementation source code must create
+  or initialize the database at runtime. Do not plan direct synthesis of
+  a .db, .sqlite, or .sqlite3 file.
+- When persistent state is required, use file-backed SQLite rather than
+  an in-memory database unless the mission explicitly requires otherwise.
+- Preserve concrete mission arguments and exact-output requirements.
+- Express exact stdout deterministically using wording such as:
+  stdout must equal "Buy milk"
+- For HTTP verification, use structured HTTP evidence rather than curl,
+  grep, pipes, background processes, kill commands, or shell process
+  control.
+- For HTTP requests, specify the HTTP method, relative path, expected
+  status, request JSON when applicable, and expected response JSON.
+- If HTTP persistence across restart must be verified, use the exact
+  standalone line:
+  Restart service
+- Include a final success-check section when required by the mission.
+- Keep the proposal focused and practical.
+""".strip()
+
+    user_prompt = f"""
+Generate a proposed replacement execution plan for this NUTTZ-OS
+mission.
+
+Mission ID: {mission["id"]}
+Mission title: {mission["title"]}
+Assigned agent: {mission["assigned_agent"]}
+Priority: {mission["priority"]}
+Current status: {mission["status"]}
+
+Existing stored plan:
+{current_plan}
+
+Completed work that must remain immutable:
+{completed_work or "(none supplied)"}
+
+Reason replanning is being considered:
+{reason or "(none supplied)"}
+
+Triggering execution evidence:
+{triggering_evidence or "(none supplied)"}
+
+Return a complete replacement plan.
+
+The completed prefix must remain exactly compatible with the existing
+stored plan. Revise only the remaining unstarted Pending work.
+
+This is a proposal only. Do not claim that it has been applied,
+approved, executed, or persisted.
+""".strip()
+
+    response = chat_with_ollama(
+        model=PLANNER_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
+            {
+                "role": "user",
+                "content": user_prompt,
+            },
+        ],
+        stream=False,
+        timeout=300,
+    )
+
+    replacement_plan = extract_plan(response)
+
+    _validate_http_service_plan(
+        mission_title=mission["title"],
+        plan=replacement_plan,
+    )
+
+    return {
+        "mission_id": mission_id,
+        "replacement_plan": replacement_plan,
+        "reason": reason,
+        "triggering_evidence": triggering_evidence,
+    }
+
+
 def get_plan(mission_id: int) -> dict[str, Any] | None:
     ensure_plan_table()
 
