@@ -4,6 +4,8 @@ from pydantic import BaseModel
 from app.database.database import get_connection
 from services.executor import (
     approve_mission_plan,
+    acknowledge_applied_replan_evidence,
+    detect_pending_replan_need,
     execute_next_task,
     finalize_mission_completion,
     get_mission_approval_status,
@@ -279,6 +281,52 @@ def run_mission(mission_id: int):
         "planner": planner_result,
         "research": research_result,
         "tasks": tasks,
+    }
+
+
+@router.get("/{mission_id}/replan/advisory")
+def mission_replan_advisory(mission_id: int):
+    """
+    Return a deterministic replan advisory from persisted task evidence.
+
+    This endpoint does not call Planner or modify mission state.
+    """
+    conn = get_connection()
+
+    try:
+        mission = conn.execute(
+            "SELECT id FROM missions WHERE id=?",
+            (mission_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if mission is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Mission {mission_id} was not found.",
+        )
+
+    try:
+        advisory = detect_pending_replan_need(
+            get_tasks(mission_id)
+        )
+
+        advisory = acknowledge_applied_replan_evidence(
+            mission_id,
+            advisory,
+        )
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Mission replan advisory failed: {error}",
+        ) from error
+
+    return {
+        "success": True,
+        "mission_id": mission_id,
+        "advisory": advisory,
     }
 
 

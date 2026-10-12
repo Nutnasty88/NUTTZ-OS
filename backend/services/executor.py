@@ -6595,6 +6595,46 @@ def detect_pending_replan_need(
 
 
 
+def acknowledge_applied_replan_evidence(
+    mission_id: int,
+    advisory: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Suppress a replan advisory already addressed by an applied replan.
+
+    Completed task evidence and persisted mission state are unchanged.
+    """
+
+    if advisory.get("recommended") is not True:
+        return advisory
+
+    evidence = str(
+        advisory.get("triggering_evidence") or ""
+    ).strip()
+
+    if not evidence:
+        return advisory
+
+    history = get_mission_replan_history(mission_id)
+
+    acknowledged = any(
+        str(entry.get("triggering_evidence") or "").strip()
+        == evidence
+        for entry in history
+    )
+
+    if not acknowledged:
+        return advisory
+
+    return {
+        **advisory,
+        "recommended": False,
+        "reason": "",
+        "triggering_evidence": "",
+        "triggering_task": None,
+    }
+
+
 def _attach_replan_advisory(
     mission_id: int,
     execution: dict[str, Any],
@@ -6611,7 +6651,15 @@ def _attach_replan_advisory(
         return execution
 
     tasks = get_tasks(mission_id)
-    execution["replan_advisory"] = detect_pending_replan_need(tasks)
+
+    advisory = detect_pending_replan_need(tasks)
+
+    execution["replan_advisory"] = (
+        acknowledge_applied_replan_evidence(
+            mission_id,
+            advisory,
+        )
+    )
 
     return execution
 

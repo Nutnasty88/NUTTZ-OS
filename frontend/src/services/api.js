@@ -160,3 +160,90 @@ export async function pauseMissionWorker(missionId) {
     },
   );
 }
+
+
+export async function proposeMissionReplan(
+  missionId,
+  {
+    completedWork = "",
+    triggeringEvidence = "",
+    reason = "",
+  } = {},
+) {
+  return request(
+    `/api/missions/${missionId}/replan/propose`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        completed_work: completedWork,
+        triggering_evidence: triggeringEvidence,
+        reason,
+      }),
+    },
+  );
+}
+
+
+export async function previewMissionReplan(
+  missionId,
+  replacementPlan,
+) {
+  return request(
+    `/api/missions/${missionId}/replan/preview`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        replacement_plan: replacementPlan,
+      }),
+    },
+  );
+}
+
+
+export async function applyMissionReplan(
+  missionId,
+  {
+    replacementPlan,
+    stateFingerprint,
+    proposalFingerprint,
+    reason = "",
+    triggeringEvidence = "",
+  },
+) {
+  return request(
+    `/api/missions/${missionId}/replan/apply`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        replacement_plan: replacementPlan,
+        state_fingerprint: stateFingerprint,
+        proposal_fingerprint: proposalFingerprint,
+        reason,
+        triggering_evidence: triggeringEvidence,
+      }),
+    },
+  );
+}
+
+
+export async function getMissionReplanAdvisory(missionId) {
+  return request(
+    `/api/missions/${missionId}/replan/advisory`,
+  );
+}
+
+
+export async function getMissionReplanHistory(missionId) {
+  return request(
+    `/api/missions/${missionId}/replan/history`,
+  );
+}

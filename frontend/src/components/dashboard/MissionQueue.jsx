@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import BuilderWorkspace from "./BuilderWorkspace";
+import {
+  applyMissionReplan,
+  getMissionReplanAdvisory,
+  proposeMissionReplan,
+} from "../../services/api";
 
 
 const API_BASE = "http://127.0.0.1:8000/api";
@@ -1536,6 +1541,13 @@ export default function MissionQueue() {
   const [deliverablesByMission, setDeliverablesByMission] =
     useState({});
   const [recoveryByMission, setRecoveryByMission] = useState({});
+
+  const [replanByMission, setReplanByMission] = useState({});
+  const [replanAdvisoryByMission, setReplanAdvisoryByMission] =
+    useState({});
+  const [replanActionMissionId, setReplanActionMissionId] =
+    useState(null);
+
   const [errors, setErrors] = useState({});
   const [worker, setWorker] = useState(EMPTY_WORKER);
 
@@ -1609,6 +1621,18 @@ export default function MissionQueue() {
   }, []);
 
 
+  const loadReplanAdvisory = useCallback(async (missionId) => {
+    const data = await getMissionReplanAdvisory(missionId);
+    const advisory = data.advisory || null;
+
+    setReplanAdvisoryByMission((current) => ({
+      ...current,
+      [missionId]: advisory,
+    }));
+
+    return advisory;
+  }, []);
+
   const loadTasks = useCallback(async (missionId) => {
     const response = await fetch(
       `${API_BASE}/missions/${missionId}/tasks`,
@@ -1629,8 +1653,17 @@ export default function MissionQueue() {
       [missionId]: tasks,
     }));
 
+    try {
+      await loadReplanAdvisory(missionId);
+    } catch (error) {
+      console.error(
+        "Mission replan advisory loading error:",
+        error,
+      );
+    }
+
     return tasks;
-  }, []);
+  }, [loadReplanAdvisory]);
 
 
   const loadPlan = useCallback(async (missionId) => {
@@ -1914,6 +1947,56 @@ export default function MissionQueue() {
     recoveryMissionKey,
     loadRecoveryStatus,
   ]);
+
+
+  const replanAdvisoryMissionKey = missions
+    .filter((mission) => mission.status !== "Completed")
+    .map((mission) => mission.id)
+    .join(",");
+
+  useEffect(() => {
+    if (!replanAdvisoryMissionKey) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    async function refreshReplanAdvisories() {
+      const missionIds = replanAdvisoryMissionKey
+        .split(",")
+        .filter(Boolean)
+        .map(Number);
+
+      await Promise.allSettled(
+        missionIds.map(async (missionId) => {
+          if (cancelled) {
+            return;
+          }
+
+          try {
+            await loadReplanAdvisory(missionId);
+          } catch (error) {
+            console.error(
+              `Replan advisory error for mission ${missionId}:`,
+              error,
+            );
+          }
+        }),
+      );
+    }
+
+    refreshReplanAdvisories();
+
+    const timer = setInterval(
+      refreshReplanAdvisories,
+      30000,
+    );
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [replanAdvisoryMissionKey, loadReplanAdvisory]);
 
 
   const statusProbeMissionId = missions[0]?.id;
@@ -2347,6 +2430,153 @@ export default function MissionQueue() {
         ...current,
         [missionId]: error.message,
       }));
+    }
+  }
+
+
+  async function generateReplanProposal(
+    missionId,
+    {
+      completedWork = "",
+      triggeringEvidence = "",
+      reason = "",
+    } = {},
+  ) {
+    setReplanActionMissionId(missionId);
+
+    setErrors((current) => ({
+      ...current,
+      [missionId]: "",
+    }));
+
+    try {
+      const data = await proposeMissionReplan(
+        missionId,
+        {
+          completedWork,
+          triggeringEvidence,
+          reason,
+        },
+      );
+
+      setReplanByMission((current) => ({
+        ...current,
+        [missionId]: {
+          proposal: data.proposal || null,
+          preview: data.preview || null,
+          reason,
+          triggeringEvidence,
+        },
+      }));
+
+      return data;
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        [missionId]:
+          error?.message ||
+          "Failed to generate mission replan proposal.",
+      }));
+
+      return null;
+    } finally {
+      setReplanActionMissionId(null);
+    }
+  }
+
+
+  async function applyReplanProposal(missionId) {
+    const replan = replanByMission[missionId];
+    const proposal = replan?.proposal;
+    const preview = replan?.preview;
+
+    const replacementPlan = String(
+      proposal?.replacement_plan ||
+        preview?.replacement_plan ||
+        "",
+    ).trim();
+
+    const stateFingerprint = String(
+      preview?.state_fingerprint || "",
+    ).trim();
+
+    const proposalFingerprint = String(
+      preview?.proposal_fingerprint || "",
+    ).trim();
+
+    if (
+      !replacementPlan ||
+      !stateFingerprint ||
+      !proposalFingerprint
+    ) {
+      setErrors((current) => ({
+        ...current,
+        [missionId]:
+          "Generate and review a valid replan proposal before applying it.",
+      }));
+
+      return null;
+    }
+
+    setReplanActionMissionId(missionId);
+
+    setErrors((current) => ({
+      ...current,
+      [missionId]: "",
+    }));
+
+    try {
+      const data = await applyMissionReplan(
+        missionId,
+        {
+          replacementPlan,
+          stateFingerprint,
+          proposalFingerprint,
+          reason: replan?.reason || "",
+          triggeringEvidence:
+            replan?.triggeringEvidence || "",
+        },
+      );
+
+      setTasksByMission((current) => ({
+        ...current,
+        [missionId]: data.tasks || [],
+      }));
+
+      if (data.approval) {
+        setApprovalByMission((current) => ({
+          ...current,
+          [missionId]: data.approval,
+        }));
+      }
+
+      setReplanByMission((current) => {
+        const next = { ...current };
+        delete next[missionId];
+        return next;
+      });
+
+      setOpenPlanId(missionId);
+      setOpenTasksId(null);
+
+      await Promise.all([
+        loadMissions(),
+        loadPlan(missionId),
+        loadTasks(missionId),
+      ]);
+
+      return data;
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        [missionId]:
+          error?.message ||
+          "Failed to apply mission replan.",
+      }));
+
+      return null;
+    } finally {
+      setReplanActionMissionId(null);
     }
   }
 
@@ -3065,6 +3295,20 @@ export default function MissionQueue() {
 
         const anotherWorkerRunning =
           worker.thread_alive && !isWorkerMission;
+
+        const replan = replanByMission[mission.id] || null;
+        const isReplanAction =
+          replanActionMissionId === mission.id;
+
+        const replanAdvisory =
+          replanAdvisoryByMission[mission.id] || null;
+
+        const replanRequired =
+          replanAdvisory?.recommended === true;
+
+        const replanReason = replanRequired
+          ? String(replanAdvisory.reason || "").trim()
+          : "";
 
         const workerProgress =
           worker.total_tasks > 0
@@ -4136,6 +4380,405 @@ export default function MissionQueue() {
                     </div>
                   )
                 ))}
+              </div>
+            )}
+
+            {replanRequired && (
+              <div
+                style={{
+                  marginTop: "14px",
+                  padding: "14px",
+                  background: "rgba(59, 35, 8, 0.94)",
+                  border: "1px solid #f0a23a",
+                  borderRadius: "7px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    flexWrap: "wrap",
+                    gap: "12px",
+                  }}
+                >
+                  <div style={{ flex: "1 1 360px" }}>
+                    <strong
+                      style={{
+                        color: "#ffc76b",
+                        letterSpacing: "0.4px",
+                      }}
+                    >
+                      REPLAN REQUIRED
+                    </strong>
+
+                    <div
+                      style={{
+                        marginTop: "7px",
+                        color: "#f4dfbd",
+                        fontSize: "12px",
+                        lineHeight: 1.55,
+                      }}
+                    >
+                      Verified execution evidence indicates that the
+                      remaining Pending plan should be reviewed before
+                      autonomous execution continues.
+                    </div>
+
+                    {replanReason && (
+                      <div
+                        style={{
+                          marginTop: "9px",
+                          padding: "9px 10px",
+                          background: "rgba(0, 0, 0, 0.18)",
+                          borderRadius: "4px",
+                          color: "#ffe3ad",
+                          fontSize: "12px",
+                          whiteSpace: "pre-wrap",
+                        }}
+                      >
+                        <strong>Reason:</strong> {replanReason}
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={
+                      isReplanAction ||
+                      worker.thread_alive ||
+                      Boolean(replan?.proposal)
+                    }
+                    onClick={() =>
+                      generateReplanProposal(
+                        mission.id,
+                        {
+                          completedWork: tasks
+                            .filter(
+                              (task) =>
+                                task.status === "Completed",
+                            )
+                            .map(
+                              (task) =>
+                                `${task.position}. ${task.title}`,
+                            )
+                            .join("\n"),
+                          triggeringEvidence:
+                            replanAdvisory?.triggering_evidence || "",
+                          reason: replanReason,
+                        },
+                      )
+                    }
+                    style={{
+                      padding: "8px 14px",
+                      color: "white",
+                      background: replan?.proposal
+                        ? "#65522f"
+                        : "#b56b16",
+                      border:
+                        "1px solid rgba(255, 199, 107, 0.65)",
+                      borderRadius: "4px",
+                      cursor:
+                        isReplanAction ||
+                        worker.thread_alive ||
+                        replan?.proposal
+                          ? "not-allowed"
+                          : "pointer",
+                      opacity:
+                        isReplanAction ||
+                        worker.thread_alive
+                          ? 0.65
+                          : 1,
+                    }}
+                  >
+                    {isReplanAction
+                      ? "Generating Proposal..."
+                      : replan?.proposal
+                        ? "Proposal Generated"
+                        : "Generate Replan Proposal"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {replan?.proposal && replan?.preview && (
+              <div
+                style={{
+                  marginTop: "14px",
+                  padding: "14px",
+                  background: "rgba(13, 31, 43, 0.96)",
+                  border: "1px solid #4da3c7",
+                  borderRadius: "7px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    flexWrap: "wrap",
+                    gap: "12px",
+                    marginBottom: "14px",
+                  }}
+                >
+                  <div>
+                    <strong
+                      style={{
+                        color: "#7dd3fc",
+                        letterSpacing: "0.4px",
+                      }}
+                    >
+                      REPLAN PROPOSAL REVIEW
+                    </strong>
+
+                    <div
+                      style={{
+                        marginTop: "5px",
+                        color: "#a9c7d8",
+                        fontSize: "12px",
+                      }}
+                    >
+                      Review the preserved work and replacement
+                      Pending plan before applying any changes.
+                    </div>
+                  </div>
+
+                  <span
+                    style={{
+                      padding: "4px 8px",
+                      borderRadius: "999px",
+                      color: "#ffd166",
+                      background: "rgba(255, 209, 102, 0.10)",
+                      border:
+                        "1px solid rgba(255, 209, 102, 0.35)",
+                      fontSize: "10px",
+                      fontWeight: 700,
+                      letterSpacing: "0.5px",
+                    }}
+                  >
+                    NOT YET APPLIED
+                  </span>
+                </div>
+
+                <div
+                  style={{
+                    marginBottom: "14px",
+                  }}
+                >
+                  <strong
+                    style={{
+                      color: "#b9dff0",
+                      fontSize: "12px",
+                    }}
+                  >
+                    Proposed Replacement Plan
+                  </strong>
+
+                  <div
+                    style={{
+                      marginTop: "7px",
+                      padding: "11px",
+                      color: "#e1f1f8",
+                      background: "rgba(0, 0, 0, 0.20)",
+                      borderRadius: "5px",
+                      whiteSpace: "pre-wrap",
+                      fontSize: "12px",
+                      lineHeight: 1.55,
+                    }}
+                  >
+                    {replan.proposal.replacement_plan}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns:
+                      "repeat(auto-fit, minmax(260px, 1fr))",
+                    gap: "12px",
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: "11px",
+                      background: "rgba(77, 227, 165, 0.06)",
+                      border:
+                        "1px solid rgba(77, 227, 165, 0.22)",
+                      borderRadius: "5px",
+                    }}
+                  >
+                    <strong
+                      style={{
+                        color: "#6fe0ae",
+                        fontSize: "12px",
+                      }}
+                    >
+                      Preserved Completed Work
+                    </strong>
+
+                    <div
+                      style={{
+                        marginTop: "8px",
+                        color: "#cde9dd",
+                        fontSize: "12px",
+                      }}
+                    >
+                      {(
+                        replan.preview.preserved_tasks || []
+                      ).length === 0 ? (
+                        <div>No preserved tasks.</div>
+                      ) : (
+                        <ol
+                          style={{
+                            margin: 0,
+                            paddingLeft: "20px",
+                          }}
+                        >
+                          {(
+                            replan.preview.preserved_tasks || []
+                          ).map((task) => (
+                            <li
+                              key={`preserved-${task.id}`}
+                              style={{ marginBottom: "6px" }}
+                            >
+                              <strong>{task.title}</strong>
+                              <div
+                                style={{
+                                  marginTop: "2px",
+                                  color: "#9fc9b7",
+                                }}
+                              >
+                                {task.instructions}
+                              </div>
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: "11px",
+                      background: "rgba(125, 211, 252, 0.06)",
+                      border:
+                        "1px solid rgba(125, 211, 252, 0.22)",
+                      borderRadius: "5px",
+                    }}
+                  >
+                    <strong
+                      style={{
+                        color: "#7dd3fc",
+                        fontSize: "12px",
+                      }}
+                    >
+                      Replacement Pending Tasks
+                    </strong>
+
+                    <div
+                      style={{
+                        marginTop: "8px",
+                        color: "#d7edf7",
+                        fontSize: "12px",
+                      }}
+                    >
+                      {(
+                        replan.preview
+                          .replacement_pending_tasks || []
+                      ).length === 0 ? (
+                        <div>No replacement Pending tasks.</div>
+                      ) : (
+                        <ol
+                          style={{
+                            margin: 0,
+                            paddingLeft: "20px",
+                          }}
+                        >
+                          {(
+                            replan.preview
+                              .replacement_pending_tasks || []
+                          ).map((task) => (
+                            <li
+                              key={`replacement-${task.position}`}
+                              style={{ marginBottom: "6px" }}
+                            >
+                              <strong>{task.title}</strong>
+                              <div
+                                style={{
+                                  marginTop: "2px",
+                                  color: "#a8cddd",
+                                }}
+                              >
+                                {task.instructions}
+                              </div>
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    gap: "10px",
+                    marginTop: "14px",
+                    paddingTop: "12px",
+                    borderTop:
+                      "1px solid rgba(77, 163, 199, 0.28)",
+                  }}
+                >
+                  <div
+                    style={{
+                      color: "#9fc4d5",
+                      fontSize: "11px",
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    Applying this proposal preserves completed
+                    history, replaces only pristine Pending work,
+                    and requires fresh plan approval.
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={
+                      isReplanAction ||
+                      worker.thread_alive
+                    }
+                    onClick={() =>
+                      applyReplanProposal(mission.id)
+                    }
+                    style={{
+                      padding: "8px 14px",
+                      color: "white",
+                      background: isReplanAction
+                        ? "#56606f"
+                        : "#147ca3",
+                      border:
+                        "1px solid rgba(125, 211, 252, 0.60)",
+                      borderRadius: "4px",
+                      cursor:
+                        isReplanAction ||
+                        worker.thread_alive
+                          ? "not-allowed"
+                          : "pointer",
+                      opacity:
+                        isReplanAction ||
+                        worker.thread_alive
+                          ? 0.65
+                          : 1,
+                    }}
+                  >
+                    {isReplanAction
+                      ? "Applying Replan..."
+                      : "Apply Replan"}
+                  </button>
+                </div>
               </div>
             )}
 
