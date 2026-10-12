@@ -5110,6 +5110,8 @@ def reset_interrupted_task(
     chosen to resume the mission.
     """
     ensure_task_table()
+    ensure_mission_approval_columns()
+    ensure_mission_replan_history_table()
 
     conn = get_connection()
 
@@ -5136,6 +5138,58 @@ def reset_interrupted_task(
                 f"Mission {mission_id} was not found."
             )
 
+        plan_rows = conn.execute(
+            """
+            SELECT position, title, instructions
+            FROM mission_tasks
+            WHERE mission_id=?
+            ORDER BY position ASC
+            """,
+            (mission_id,),
+        ).fetchall()
+
+        plan_tasks = [
+            {
+                "position": int(row["position"]),
+                "title": str(row["title"]),
+                "instructions": str(row["instructions"]),
+            }
+            for row in plan_rows
+        ]
+
+        current_fingerprint = None
+
+        if plan_tasks:
+            payload = json.dumps(
+                plan_tasks,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            current_fingerprint = hashlib.sha256(
+                payload.encode("utf-8")
+            ).hexdigest()
+
+        approval = conn.execute(
+            """
+            SELECT approved_plan_fingerprint
+            FROM missions
+            WHERE id=?
+            """,
+            (mission_id,),
+        ).fetchone()
+
+        if (
+            not current_fingerprint
+            or not approval["approved_plan_fingerprint"]
+            or current_fingerprint
+            != approval["approved_plan_fingerprint"]
+        ):
+            raise RuntimeError(
+                "Mission plan review and explicit approval "
+                "are required before interrupted recovery."
+            )
+
         interrupted_task = conn.execute(
             """
             SELECT
@@ -5158,6 +5212,55 @@ def reset_interrupted_task(
                 f"Mission {mission_id} has no "
                 "interrupted task to reset."
             )
+
+        evidence_rows = conn.execute(
+            """
+            SELECT id, position, status, result
+            FROM mission_tasks
+            WHERE mission_id=?
+            ORDER BY position ASC
+            """,
+            (mission_id,),
+        ).fetchall()
+
+        recovery_view = [
+            {
+                **dict(row),
+                "status": (
+                    "Pending"
+                    if row["id"] == interrupted_task["id"]
+                    else row["status"]
+                ),
+            }
+            for row in evidence_rows
+        ]
+
+        advisory = detect_pending_replan_need(
+            recovery_view
+        )
+
+        if advisory["recommended"]:
+            evidence = str(
+                advisory["triggering_evidence"] or ""
+            ).strip()
+
+            acknowledged = conn.execute(
+                """
+                SELECT 1
+                FROM mission_replan_history
+                WHERE mission_id=?
+                  AND TRIM(triggering_evidence)=?
+                LIMIT 1
+                """,
+                (mission_id, evidence),
+            ).fetchone()
+
+            if acknowledged is None:
+                raise RuntimeError(
+                    "Interrupted recovery requires replan "
+                    "review before the task can be reset: "
+                    + advisory["reason"]
+                )
 
         cursor = conn.execute(
             """
@@ -5192,6 +5295,10 @@ def reset_interrupted_task(
         )
 
         conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
 
     finally:
         conn.close()
