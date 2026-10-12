@@ -137,6 +137,20 @@ function recoveryTone(state) {
       border: "1px solid rgba(255, 209, 102, 0.35)",
     },
 
+    approval_required: {
+      label: "APPROVAL REQUIRED",
+      color: "#ffd166",
+      background: "rgba(255, 209, 102, 0.10)",
+      border: "1px solid rgba(255, 209, 102, 0.35)",
+    },
+
+    replan_required: {
+      label: "REPLAN REQUIRED",
+      color: "#ff9f6e",
+      background: "rgba(255, 159, 110, 0.10)",
+      border: "1px solid rgba(255, 159, 110, 0.35)",
+    },
+
     interrupted: {
       label: "INTERRUPTED",
       color: "#ff9f6e",
@@ -3759,7 +3773,8 @@ export default function MissionQueue() {
                   type="button"
                   disabled={
                     isWorkerAction ||
-                    worker.thread_alive
+                    worker.thread_alive ||
+                    recovery?.recovery?.can_resume !== true
                   }
                   onClick={() =>
                     resumeInterruptedTask(mission.id)
@@ -3774,17 +3789,23 @@ export default function MissionQueue() {
                     borderRadius: "4px",
                     cursor: isWorkerAction
                       ? "wait"
-                      : "pointer",
+                      : worker.thread_alive ||
+                          recovery?.recovery?.can_resume !== true
+                        ? "not-allowed"
+                        : "pointer",
                     opacity:
                       isWorkerAction ||
-                      worker.thread_alive
+                      worker.thread_alive ||
+                      recovery?.recovery?.can_resume !== true
                         ? 0.6
                         : 1,
                   }}
                 >
                   {isWorkerAction
                     ? "Resuming task..."
-                    : "↻ Resume Interrupted Task"}
+                    : recovery?.recovery?.can_resume !== true
+                      ? "Recovery Unavailable"
+                      : "↻ Resume Interrupted Task"}
                 </button>
               )}
 

@@ -1541,13 +1541,51 @@ def get_mission_recovery_status(mission_id: int):
         )
 
     elif task_status == "Interrupted":
-        recovery_state = "interrupted"
-        operator_action_required = True
-        can_resume = True
-        message = (
-            "Execution was interrupted and requires "
-            "operator-approved recovery."
-        )
+        approval = get_mission_approval_status(mission_id)
+
+        if not approval["approved"]:
+            recovery_state = "approval_required"
+            operator_action_required = True
+            can_resume = False
+            message = (
+                "Mission plan review and explicit approval "
+                "are required before interrupted recovery."
+            )
+        else:
+            recovery_tasks = [
+                dict(item)
+                for item in get_tasks(mission_id)
+            ]
+
+            for item in recovery_tasks:
+                if item["id"] == task_data["id"]:
+                    item["status"] = "Pending"
+                    break
+
+            advisory = detect_pending_replan_need(
+                recovery_tasks
+            )
+            advisory = acknowledge_applied_replan_evidence(
+                mission_id,
+                advisory,
+            )
+
+            if advisory["recommended"]:
+                recovery_state = "replan_required"
+                operator_action_required = True
+                can_resume = False
+                message = (
+                    "Interrupted recovery requires replan review "
+                    "before the task can be reset."
+                )
+            else:
+                recovery_state = "interrupted"
+                operator_action_required = True
+                can_resume = True
+                message = (
+                    "Execution was interrupted and requires "
+                    "operator-approved recovery."
+                )
 
     elif task_status == "Error":
         recovery_state = "error"
