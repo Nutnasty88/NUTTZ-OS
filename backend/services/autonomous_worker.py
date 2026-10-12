@@ -575,6 +575,23 @@ def _run_worker(
             tasks = get_tasks(mission_id)
             total, completed = _count_tasks(tasks)
 
+            from services.executor import (
+                detect_pending_replan_need,
+                acknowledge_applied_replan_evidence,
+            )
+
+            advisory = acknowledge_applied_replan_evidence(
+                mission_id,
+                detect_pending_replan_need(tasks),
+            )
+
+            if _stop_for_replan_advisory(
+                {"replan_advisory": advisory},
+                total_tasks=total,
+                completed_tasks=completed,
+            ):
+                return
+
             pending_tasks = [
                 task
                 for task in tasks
@@ -765,6 +782,22 @@ def start_worker(
         )
 
     require_mission_plan_approval(mission_id)
+
+    from services.executor import (
+        detect_pending_replan_need,
+        acknowledge_applied_replan_evidence,
+    )
+
+    advisory = acknowledge_applied_replan_evidence(
+        mission_id,
+        detect_pending_replan_need(tasks),
+    )
+
+    if advisory.get("recommended") is True:
+        raise RuntimeError(
+            "Mission requires replan review before worker startup: "
+            + str(advisory.get("reason") or "verified evidence")
+        )
 
     total, completed = _count_tasks(tasks)
     pending = [
