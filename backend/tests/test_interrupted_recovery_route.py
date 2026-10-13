@@ -11,6 +11,34 @@ missions = importlib.import_module(
 MISSION_ID = 17501
 
 
+
+class FakeMissionConnection:
+    def execute(self, query, params):
+        assert "SELECT 1 FROM missions" in query
+        assert params == (MISSION_ID,)
+        return self
+
+    def fetchone(self):
+        return (1,)
+
+    def close(self):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def existing_mission_and_audit(monkeypatch):
+    monkeypatch.setattr(
+        missions,
+        "get_connection",
+        lambda: FakeMissionConnection(),
+    )
+    monkeypatch.setattr(
+        missions,
+        "log_event",
+        lambda *args, **kwargs: None,
+    )
+
+
 @pytest.fixture
 def safe_recovery(monkeypatch):
     monkeypatch.setattr(

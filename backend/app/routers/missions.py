@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.database.database import get_connection
+from app.services.events import log_event
 from services.executor import (
     approve_mission_plan,
     acknowledge_applied_replan_evidence,
@@ -1071,6 +1072,20 @@ def reclaim_orphaned_mission(
     }
 
 
+def _audit_recovery(
+    mission_id: int,
+    event_type: str,
+    message: str,
+) -> None:
+    """Record a recovery decision in the mission event journal."""
+    log_event(
+        mission_id,
+        "Recovery",
+        event_type,
+        message,
+    )
+
+
 @router.post("/{mission_id}/recovery/resume")
 def resume_mission_recovery(
     mission_id: int,
@@ -1084,10 +1099,38 @@ def resume_mission_recovery(
     worker may still own execution and recovery must not mutate the
     mission.
     """
+    conn = get_connection()
+
+    try:
+        mission_exists = conn.execute(
+            "SELECT 1 FROM missions WHERE id = ?",
+            (mission_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if mission_exists is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Mission {mission_id} was not found.",
+        )
+
+    _audit_recovery(
+        mission_id,
+        "recovery_requested",
+        "Operator requested interrupted mission recovery.",
+    )
+
     current_worker = get_worker_status()
 
     if current_worker.get("thread_alive"):
         active_mission_id = current_worker.get("mission_id")
+
+        _audit_recovery(
+            mission_id,
+            "recovery_denied",
+            "Recovery denied: a local Autonomous Worker is active.",
+        )
 
         raise HTTPException(
             status_code=409,
@@ -1105,6 +1148,12 @@ def resume_mission_recovery(
     lease = get_worker_lease(mission_id)
 
     if lease and lease.get("valid") is False:
+        _audit_recovery(
+            mission_id,
+            "recovery_denied",
+            "Recovery denied: invalid worker lease metadata.",
+        )
+
         raise HTTPException(
             status_code=409,
             detail=(
@@ -1114,6 +1163,12 @@ def resume_mission_recovery(
         )
 
     if lease and lease.get("active"):
+        _audit_recovery(
+            mission_id,
+            "recovery_denied",
+            "Recovery denied: an active worker lease exists.",
+        )
+
         raise HTTPException(
             status_code=409,
             detail=(
@@ -1132,6 +1187,12 @@ def resume_mission_recovery(
         ) from error
 
     except RuntimeError as error:
+        _audit_recovery(
+            mission_id,
+            "recovery_denied",
+            f"Recovery denied by task-reset guard: {error}",
+        )
+
         raise HTTPException(
             status_code=409,
             detail=str(error),
@@ -1144,6 +1205,39 @@ def resume_mission_recovery(
                 f"Interrupted recovery reset failed: {error}"
             ),
         ) from error
+
+    try:
+        _audit_recovery(
+            mission_id,
+            "recovery_authorized",
+            "Recovery guards passed and interrupted task was reset.",
+        )
+
+    except Exception as audit_error:
+        try:
+            rollback = rollback_interrupted_task_reset(
+                mission_id=mission_id,
+                task_id=reset["task_id"],
+            )
+        except Exception as rollback_error:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Recovery authorization audit failed, "
+                    "and task rollback also failed. "
+                    f"Audit error: {audit_error}. "
+                    f"Rollback error: {rollback_error}"
+                ),
+            ) from audit_error
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Recovery authorization audit failed. "
+                f"Task reset rolled back to {rollback['status']}. "
+                f"Audit error: {audit_error}"
+            ),
+        ) from audit_error
 
     try:
         worker = start_worker(
@@ -1170,6 +1264,26 @@ def resume_mission_recovery(
                 ),
             ) from error
 
+        try:
+            _audit_recovery(
+                mission_id,
+                "recovery_failed",
+                (
+                    "Autonomous Worker startup failed; "
+                    f"task reset rolled back to {rollback['status']}. "
+                    f"Reason: {error}"
+                ),
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "Recovery rollback completed for mission %s, "
+                "but the recovery_failed audit event "
+                "could not be saved.",
+                mission_id,
+            )
+
         if isinstance(error, ValueError):
             status_code = 400
             failure = "the worker could not start"
@@ -1191,8 +1305,30 @@ def resume_mission_recovery(
             ),
         ) from error
 
+    audit_warning = None
+
+    try:
+        _audit_recovery(
+            mission_id,
+            "recovery_started",
+            "Autonomous Worker recovery started successfully.",
+        )
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "Recovery started for mission %s, but the "
+            "recovery_started audit event could not be saved.",
+            mission_id,
+        )
+        audit_warning = (
+            "Recovery worker started, but its final "
+            "audit event could not be saved."
+        )
+
     return {
         "success": True,
+        "audit_warning": audit_warning,
         "message": (
             f"Interrupted mission {mission_id} was reset and "
             "Autonomous Worker recovery started."
